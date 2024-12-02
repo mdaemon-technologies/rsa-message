@@ -99,7 +99,7 @@ class RSAMessage {
     );
   };
 
-  private signMessage = async (message: string) => {
+  public signMessage = async (message: string) => {
     const encoder = getTextEncoder();
     const data = encoder.encode(message);
     
@@ -171,7 +171,7 @@ class RSAMessage {
     } as IRSAEncryptedMessage;
   }
 
-  private verifySignature = async (signature: Uint8Array, message: string, userId: string) => {
+  public verifySignature = async (signature: Uint8Array, message: string, userId: string) => {
     const publicKeyRaw = this.publicKeys.get(userId);
     if (!publicKeyRaw) {
       throw new Error("Public key not found for user");
