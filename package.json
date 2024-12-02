@@ -2,7 +2,7 @@
   "name": "@mdaemon/rsa-message",
   "type": "module",
   "version": "1.0.0",
-  "description": "Message encryption using openpgp.js",
+  "description": "RSA message encryption using webcrypto or node crypto",
   "main": "dist/rsa-message.umd.js",
   "module": "dist/rsa-message.mjs",
   "browser": "dist/rsa-message.umd.js",
