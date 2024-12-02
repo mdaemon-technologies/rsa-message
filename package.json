@@ -1,7 +1,7 @@
 {
   "name": "@mdaemon/rsa-message",
   "type": "module",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "RSA message encryption using webcrypto or node crypto",
   "main": "dist/rsa-message.umd.js",
   "module": "dist/rsa-message.mjs",
