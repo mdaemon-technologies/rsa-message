@@ -1,0 +1,1 @@
+declare module '@mdaemon/rsa-message/dist/rsa-message.umd.js'

@@ -1,0 +1,58 @@
+{
+  "name": "@mdaemon/rsa-message",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Message encryption using openpgp.js",
+  "main": "dist/rsa-message.umd.js",
+  "module": "dist/rsa-message.mjs",
+  "browser": "dist/rsa-message.umd.js",
+  "common": "dist/rsa-message.cjs",
+  "typings": "dist/rsa-message.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rollup -c",
+    "dev": "rollup -c -w",
+    "test": "jest",
+    "watch": "jest --watchAll",
+    "pub": "npm run build && npm run test && npm publish"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mdaemon-technologies/rsa-message.git"
+  },
+  "keywords": [
+    "pgp",
+    "openpgp",
+    "encypt",
+    "messaging"
+  ],
+  "author": {
+    "name": "MDaemon Technologies, Ltd.",
+    "email": "jonathan.ehman@mdaemon.com",
+    "url": "https://www.mdaemon.com"
+  },
+  "license": "LGPL-2.1",
+  "bugs": {
+    "url": "https://github.com/mdaemon-technologies/rsa-message/issues"
+  },
+  "homepage": "https://github.com/mdaemon-technologies/rsa-message#readme",
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^23.0.7",
+    "@rollup/plugin-node-resolve": "^15.2.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^11.1.6",
+    "@types/jest": "^29.5.12",
+    "jest": "^29.7.0",
+    "jest-environment-jsdom": "^29.7.0",
+    "rollup": "^2.79.1",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "tslib": "^2.7.0",
+    "typescript": "^5.6.2"
+  },
+  "filest": [
+    "dist"
+  ]
+}
