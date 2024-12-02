@@ -1,3 +1,24 @@
+// Add at top of file
+const getCrypto = () => {
+  if (typeof window !== 'undefined') {
+    return window.crypto;
+  }
+  return require('crypto').webcrypto;
+};
+
+const getTextEncoder = () => {
+  if (typeof window !== 'undefined') {
+    return new window.TextEncoder();
+  }
+  return new (require('util').TextEncoder)();
+};
+
+const getTextDecoder = () => {
+  if (typeof window !== 'undefined') {
+    return new window.TextDecoder();
+  }
+  return new (require('util').TextDecoder)();
+};
 
 export interface IRSAEncryptedMessage {
   iv: Uint8Array;
@@ -25,7 +46,7 @@ class RSAMessage {
   }
 
   private async generateAESKey() {
-    return await window.crypto.subtle.generateKey(
+    return await getCrypto().subtle.generateKey(
       {
       name: "AES-GCM",
       length: 256,
@@ -46,7 +67,7 @@ class RSAMessage {
   }
 
   private genKeyPair = async () => {
-    const keyPair = await window.crypto.subtle.generateKey(
+    const keyPair = await getCrypto().subtle.generateKey(
       {
        name: "RSA-OAEP",
        modulusLength: 2048,
@@ -57,8 +78,8 @@ class RSAMessage {
       ["encrypt", "decrypt"]
     );
     
-    const publicKeyRaw = await window.crypto.subtle.exportKey("spki", keyPair.publicKey);
-    const privateKeyRaw = await window.crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+    const publicKeyRaw = await getCrypto().subtle.exportKey("spki", keyPair.publicKey);
+    const privateKeyRaw = await getCrypto().subtle.exportKey("pkcs8", keyPair.privateKey);
     this.publicKey = String.fromCharCode(...Array.from(new Uint8Array(publicKeyRaw)));
     this.privateKey = String.fromCharCode(...Array.from(new Uint8Array(privateKeyRaw)));
     
@@ -66,7 +87,7 @@ class RSAMessage {
   };
 
   private importPrivateKey = async (privateKey: string, type: "sign" | "decrypt") => {
-    return await window.crypto.subtle.importKey(
+    return await getCrypto().subtle.importKey(
       "pkcs8",
       new Uint8Array([...privateKey].map(c => c.charCodeAt(0))),
       {
@@ -79,12 +100,12 @@ class RSAMessage {
   };
 
   private signMessage = async (message: string) => {
-    const encoder = new TextEncoder();
+    const encoder = getTextEncoder();
     const data = encoder.encode(message);
     
     const rsaPrivateKey = await this.importPrivateKey(this.privateKey, "sign");
 
-    return await window.crypto.subtle.sign(
+    return await getCrypto().subtle.sign(
       {
       name: "RSA-PSS",
       saltLength: 32,
@@ -95,7 +116,7 @@ class RSAMessage {
   };
 
   private importPublicKey = async (publicKey: string, type: "encrypt" | "verify") => {
-    return await window.crypto.subtle.importKey(
+    return await getCrypto().subtle.importKey(
       "spki",
       new Uint8Array([...publicKey].map(c => c.charCodeAt(0))),
       {
@@ -115,13 +136,13 @@ class RSAMessage {
   
     const publicKey = await this.importPublicKey(publicKeyRaw, "encrypt");
 
-    const encoder = new TextEncoder();
+    const encoder = getTextEncoder();
     const data = encoder.encode(message);
     
     // Encrypt the message with AES
     const aesKey = await this.generateAESKey();
-    const iv = window.crypto.getRandomValues(new Uint8Array(12)); // 12-byte IV for AES-GCM
-    const encryptedMessage = await window.crypto.subtle.encrypt(
+    const iv = getCrypto().getRandomValues(new Uint8Array(12)); // 12-byte IV for AES-GCM
+    const encryptedMessage = await getCrypto().subtle.encrypt(
       {
       name: "AES-GCM",
       iv,
@@ -131,8 +152,8 @@ class RSAMessage {
     );
   
     // Export and encrypt the AES key with RSA
-    const aesKeyData = await window.crypto.subtle.exportKey("raw", aesKey);
-    const encryptedAESKey = await window.crypto.subtle.encrypt(
+    const aesKeyData = await getCrypto().subtle.exportKey("raw", aesKey);
+    const encryptedAESKey = await getCrypto().subtle.encrypt(
       {
       name: "RSA-OAEP",
       },
@@ -158,10 +179,10 @@ class RSAMessage {
 
     const publicKey = await this.importPublicKey(publicKeyRaw, "verify");
 
-    const encoder = new TextEncoder();
+    const encoder = getTextEncoder();
     const data = encoder.encode(message);
   
-    return await window.crypto.subtle.verify(
+    return await getCrypto().subtle.verify(
       {
       name: "RSA-PSS",
       saltLength: 32,
@@ -184,7 +205,7 @@ class RSAMessage {
     
 
    // Decrypt the AES key with RSA
-   const aesKeyData = await window.crypto.subtle.decrypt(
+   const aesKeyData = await getCrypto().subtle.decrypt(
     {
      name: "RSA-OAEP",
     },
@@ -193,7 +214,7 @@ class RSAMessage {
    );
   
    // Import the AES key
-   const aesKey = await window.crypto.subtle.importKey(
+   const aesKey = await getCrypto().subtle.importKey(
     "raw",
     aesKeyData,
     "AES-GCM",
@@ -202,7 +223,7 @@ class RSAMessage {
    );
   
    // Decrypt the message with AES
-   const decryptedMessage = await window.crypto.subtle.decrypt(
+   const decryptedMessage = await getCrypto().subtle.decrypt(
     {
      name: "AES-GCM",
      iv,
@@ -212,7 +233,7 @@ class RSAMessage {
    );
 
    
-   const decoder = new TextDecoder();
+   const decoder = getTextDecoder();
    const message = decoder.decode(decryptedMessage);
    
    const verified = await this.verifySignature(signature, message, userId);
