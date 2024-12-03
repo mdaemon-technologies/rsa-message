@@ -196,57 +196,89 @@ class RSAMessage {
   public decryptMessage = async (encryptedData: IRSAEncryptedMessage, userId: string) => {
     const publicKey = this.publicKeys.get(userId);
     if (!publicKey) {
-      throw new Error("Public key not found for user");
+      throw new Error(`Public key not found for user ${userId}`);
     }
 
     const { iv, encryptedMessage, encryptedAESKey, signature } = encryptedData;
+    let privateKey: any = "";
+
+    try {
+      privateKey = await this.importPrivateKey(this.privateKey, "decrypt");
+    }
+    catch (error) {
+      throw new Error(`Failed to import private key: ${error}`);
+    }
+
+    // Decrypt the AES key with RSA
+    let aesKeyData: any = "";
+    try {
+      aesKeyData = await getCrypto().subtle.decrypt(
+        {
+          name: "RSA-OAEP",
+        },
+        privateKey,
+        encryptedAESKey
+      );
+    }
+    catch (error) {
+      throw new Error(`Failed to decrypt AES key: ${error}`);
+    }
   
-    const privateKey = await this.importPrivateKey(this.privateKey, "decrypt");
+    // Import the AES key
+    let aesKey: any = "";
+    try {
+      aesKey = await getCrypto().subtle.importKey(
+        "raw",
+        aesKeyData,
+        "AES-GCM",
+        true,
+        ["decrypt"]
+      );
+    }
+    catch (error) {
+      throw new Error(`Failed to import AES key: ${error}`);
+    }
+
+    // Decrypt the message with AES
+    let decryptedMessage: any = "";
+    try {
+      decryptedMessage = await getCrypto().subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv,
+        },
+        aesKey,
+        encryptedMessage
+      );
+    }
+    catch (error) {
+      throw new Error(`Failed to decrypt message: ${error}`);
+    }
+   
+    try {
+      const decoder = getTextDecoder();
+      const message = decoder.decode(decryptedMessage);
     
+      const verified = await this.verifySignature(signature, message, userId);
+      
+      if (!verified) {
+        throw new Error("Signature verification failed");
+      }
 
-   // Decrypt the AES key with RSA
-   const aesKeyData = await getCrypto().subtle.decrypt(
-    {
-     name: "RSA-OAEP",
-    },
-    privateKey,
-    encryptedAESKey
-   );
-  
-   // Import the AES key
-   const aesKey = await getCrypto().subtle.importKey(
-    "raw",
-    aesKeyData,
-    "AES-GCM",
-    true,
-    ["decrypt"]
-   );
-  
-   // Decrypt the message with AES
-   const decryptedMessage = await getCrypto().subtle.decrypt(
-    {
-     name: "AES-GCM",
-     iv,
-    },
-    aesKey,
-    encryptedMessage
-   );
-
-   
-   const decoder = getTextDecoder();
-   const message = decoder.decode(decryptedMessage);
-   
-   const verified = await this.verifySignature(signature, message, userId);
-   if (!verified) {
-    throw new Error("Signature verification failed");
-   }
-
-   return message;
+      return message;
+    }
+    catch (error) {
+      throw new Error(`Failed to verify signature: ${error}`);
+    }
   };
 
   public setPublicKey(userId: string, publicKey: string) {
     publicKey = atob(publicKey);
     this.publicKeys.set(userId, publicKey);
+  }
+
+  public hasPublicKey(userId: string): boolean {
+    return this.publicKeys.has(userId);
   }
 
   public exportEncryptedMessage(message: IRSAEncryptedMessage): string {

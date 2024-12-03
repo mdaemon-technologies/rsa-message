@@ -10,11 +10,12 @@ export default class RSAMessage {
     get publickey(): string;
     get privatekey(): string;
     init(publicKey?: string, privateKey?: string): Promise<string>;
+    setPublicKey(userId: string, publicKey: string): void;
+    hasPublicKey(userId: string): boolean;
     signMessage(message: string): Promise<ArrayBuffer>;
     encryptMessage(message: string, userId: string): Promise<IRSAEncryptedMessage>;
     verifySignature(signature: Uint8Array, message: string, userId: string): Promise<boolean>;
     decryptMessage(encryptedData: IRSAEncryptedMessage, userId: string): Promise<string>;
-    setPublicKey(userId: string, publicKey: string): void;
     exportEncryptedMessage(message: IRSAEncryptedMessage): string;
     importEncryptedMessage(encoded: string): IRSAEncryptedMessage;
 }

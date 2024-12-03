@@ -74,6 +74,11 @@ Stores another user's public key.
 - `userId`: Unique identifier for the other user
 - `publicKey`: Base64 encoded public key
 
+### `hasPublicKey(userId: string): boolean`
+Checks if a user's public key is stored.
+- `userId`: Unique identifier for the user
+- Returns: `true` if the user's public key is stored, `false` otherwise
+
 ### `encryptMessage(message: string, userId: string): Promise<string>`
 Encrypts and signs a message for a specific user.
 - `message`: The message to encrypt
@@ -86,9 +91,15 @@ Decrypts and verifies a message from a specific user.
 - `userId`: The sender's user ID
 - Returns: Decrypted message
 
+### `exportEncryptedMessage(message: IRSAEncryptedMessage): string`
+Exports an encrypted message object to a base64 encoded string for transport or storage.
+- `message`: The encrypted message object containing iv, encryptedMessage, encryptedAESKey and signature
+- Returns: Base64 encoded string representation of the encrypted message
 
-
-
+### `importEncryptedMessage(encoded: string): IRSAEncryptedMessage`
+Imports a base64 encoded encrypted message string back into an encrypted message object.
+- `encoded`: Base64 encoded string previously created by exportEncryptedMessage
+- Returns: Decoded IRSAEncryptedMessage object containing iv, encryptedMessage, encryptedAESKey and signature
 
 ## Security Features
 
@@ -96,7 +107,6 @@ Decrypts and verifies a message from a specific user.
 - Implements message signing and signature verification
 - Automatic key pair generation with random passphrase
 - Base64 encoding for message transport
-
 # License #
 
 Published under the [LGPL-2.1 license](https://github.com/mdaemon-technologies/rsa-message/blob/main/LICENSE "LGPL-2.1 License").

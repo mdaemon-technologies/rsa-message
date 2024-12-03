@@ -104,4 +104,49 @@ describe('RSAMessage', () => {
     // Verify it's valid base64
     expect(() => atob(exported)).not.toThrow();
   });
+
+  test('setPublicKey and hasPublicKey work correctly', async () => {
+      await sender.init();
+      const testKey = await receiver.init();
+      
+      expect(sender.hasPublicKey('receiver')).toBe(false);
+      sender.setPublicKey('receiver', testKey);
+      expect(sender.hasPublicKey('receiver')).toBe(true);
+    });
+  
+    test('sign and verifySignature work correctly', async () => {
+      const message = 'Test message';
+      await sender.init();
+      const receiverKey = await receiver.init();
+      sender.setPublicKey('receiver', receiverKey);
+      receiver.setPublicKey('sender', sender.publickey);
+      
+      const signature = await sender.signMessage(message);
+      const isValid = await receiver.verifySignature(signature, message, 'sender');
+      expect(isValid).toBe(true);
+    });
+  
+    test('verifySignature fails with incorrect signature', async () => {
+      const message = 'Test message';
+      await sender.init();
+      const receiverKey = await receiver.init();
+      sender.setPublicKey('receiver', receiverKey);
+      receiver.setPublicKey('sender', sender.publickey);
+      
+      const signature = await sender.signMessage(message);
+      const isValid = await receiver.verifySignature(signature, 'Different message', 'sender');
+      expect(isValid).toBe(false);
+    });
+  
+    test('verifySignature throws error for unknown user', async () => {
+      const message = 'Test message';
+      await sender.init();
+      const signature = await sender.signMessage(message);
+      receiver.setPublicKey('sender', sender.publickey);
+      
+      await expect(async () => {
+        await receiver.verifySignature(signature, message, 'unknown');
+      }).rejects.toThrow('Public key not found for user');
+    });
+  
 });
