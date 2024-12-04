@@ -1,3 +1,4 @@
+import { nodeResolve } from '@rollup/plugin-node-resolve';
 import typescript from "@rollup/plugin-typescript";
 import commonjs from '@rollup/plugin-commonjs';
 import terser from '@rollup/plugin-terser';
@@ -12,9 +13,10 @@ export default [
       { file: pkg.module, format: 'es', exports: "default", name: "RSAMessage" }
     ],
     plugins: [
+      nodeResolve(),
       typescript(),
       commonjs(),
-      terser()
+      //terser()
     ]
   },
 ]

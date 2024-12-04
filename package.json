@@ -1,8 +1,8 @@
 {
   "name": "@mdaemon/rsa-message",
   "type": "module",
-  "version": "1.0.2",
-  "description": "RSA message encryption using webcrypto or node crypto",
+  "version": "1.1.0",
+  "description": "RSA message encryption, signing, decryption, and verification using webcrypto or node crypto",
   "main": "dist/rsa-message.umd.js",
   "module": "dist/rsa-message.mjs",
   "browser": "dist/rsa-message.umd.js",
@@ -23,9 +23,13 @@
     "url": "git+https://github.com/mdaemon-technologies/rsa-message.git"
   },
   "keywords": [
-    "pgp",
-    "openpgp",
+    "rsa",
+    "aes",
     "encypt",
+    "decrypt",
+    "sign",
+    "verify",
+    "message",
     "messaging"
   ],
   "author": {
@@ -43,6 +47,7 @@
     "@rollup/plugin-node-resolve": "^15.2.3",
     "@rollup/plugin-terser": "^0.4.4",
     "@rollup/plugin-typescript": "^11.1.6",
+    "@types/base64util": "^2.2.2",
     "@types/jest": "^29.5.12",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
@@ -54,5 +59,8 @@
   },
   "filest": [
     "dist"
-  ]
+  ],
+  "dependencies": {
+    "base64util": "^2.2.0"
+  }
 }

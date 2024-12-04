@@ -1,4 +1,5 @@
-// Add at top of file
+import { encode, decode, byteEncode } from "base64util";
+
 const getCrypto = () => {
   if (typeof window !== 'undefined') {
     return window.crypto;
@@ -20,112 +21,159 @@ const getTextDecoder = () => {
   return new (require('util').TextDecoder)();
 };
 
+function bufferToBase64(buffer: ArrayBuffer): string {
+  const byteView = new Uint8Array(buffer);
+  let str = "";
+  for (const charCode of byteView) {
+    str += String.fromCharCode(charCode);
+  }
+  
+  return byteEncode(str);
+}
+
+function base64ToBuffer(base64String: string): ArrayBuffer {
+  const str = decode(base64String);
+  const buffer = new ArrayBuffer(str.length);
+  const byteView = new Uint8Array(buffer);
+  for (let i = 0; i < str.length; i++) {
+    byteView[i] = str.charCodeAt(i);
+  }
+  return buffer;
+}
+
 export interface IRSAEncryptedMessage {
   iv: Uint8Array;
-  encryptedMessage: Uint8Array;
-  encryptedAESKey: Uint8Array;
-  signature: Uint8Array;
+  encryptedMessage: ArrayBuffer;
+  encryptedAESKey: ArrayBuffer;
+  signature: ArrayBuffer;
 }
 
 class RSAMessage {
   private privateKey: string;
   private publicKey: string;
-  private publicKeys: Map<string, string> = new Map();
+  private verifyKey: string;
+  private signKey: string;
+  private publicKeys: Map<string, { encrypt: string, verify: string }> = new Map();
 
   constructor() {
     this.privateKey = "";
     this.publicKey = "";
+    this.verifyKey = "";
+    this.signKey = "";
   }
 
   get publickey() {
-    return btoa(this.publicKey);
+    return this.publicKey;
+  }
+
+  get verifykey() {
+    return this.verifyKey;
   }
 
   get privatekey() {
-    return btoa(this.privateKey);
+    return this.privateKey;
+  }
+
+  get signkey() {
+    return this.signKey;
   }
 
   private async generateAESKey() {
     return await getCrypto().subtle.generateKey(
       {
-      name: "AES-GCM",
-      length: 256,
+        name: "AES-GCM",
+        length: 256,
       },
       true,
       ["encrypt", "decrypt"]
     );
   }
 
-  public async init(publicKey?: string, privateKey?: string) {
-    if (publicKey && privateKey) {
-      this.publicKey = atob(publicKey);
-      this.privateKey = atob(privateKey);
-      return publicKey;
+  public async init(publicKey?: string, privateKey?: string, verifyKey?: string, signKey?: string) {
+    if (publicKey && privateKey && verifyKey && signKey) {
+      this.publicKey = publicKey;
+      this.privateKey = privateKey;
+      this.verifyKey = verifyKey; 
+      this.signKey = signKey;
+      return { publicKey: this.publicKey, verifyKey: this.verifyKey };
     }
-    publicKey = await this.genKeyPair();
-    return btoa(publicKey);
+
+    const encryptionKeys = await this.genKeyPair();
+    const signatureKeys = await this.genKeyPair("sign");
+    this.publicKey = encryptionKeys.publicKey;
+    this.privateKey = encryptionKeys.privateKey;
+    this.verifyKey = signatureKeys.publicKey;
+    this.signKey = signatureKeys.privateKey;
+    return { publicKey: encryptionKeys.publicKey, verifyKey: signatureKeys.publicKey };
   }
 
-  private genKeyPair = async () => {
+  private genKeyPair = async (type: "decrypt" | "sign" = "decrypt") => {
+    const usage = type === "decrypt" ? ["encrypt", "decrypt"] : ["sign", "verify"];
     const keyPair = await getCrypto().subtle.generateKey(
       {
-       name: "RSA-OAEP",
+       name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
        modulusLength: 2048,
        publicExponent: new Uint8Array([1, 0, 1]),
        hash: "SHA-256",
       },
       true,
-      ["encrypt", "decrypt"]
+      usage
     );
     
-    const publicKeyRaw = await getCrypto().subtle.exportKey("spki", keyPair.publicKey);
-    const privateKeyRaw = await getCrypto().subtle.exportKey("pkcs8", keyPair.privateKey);
-    this.publicKey = String.fromCharCode(...Array.from(new Uint8Array(publicKeyRaw)));
-    this.privateKey = String.fromCharCode(...Array.from(new Uint8Array(privateKeyRaw)));
-    
-    return this.publicKey;
+    const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.publicKey);
+    const privateKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.privateKey);
+    return { publicKey: encode(JSON.stringify(publicKeyRaw)), privateKey: encode(JSON.stringify(privateKeyRaw)) };
   };
 
   private importPrivateKey = async (privateKey: string, type: "sign" | "decrypt") => {
-    return await getCrypto().subtle.importKey(
-      "pkcs8",
-      new Uint8Array([...privateKey].map(c => c.charCodeAt(0))),
-      {
-        name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
-        hash: "SHA-256",
-      },
-      true,
-      [type]
-    );
-  };
-
-  public signMessage = async (message: string) => {
-    const encoder = getTextEncoder();
-    const data = encoder.encode(message);
+    const options: {  [key: string]: any } = {
+      name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
+      hash: "SHA-256",
+    };
+    if (type === "sign") {
+      options.saltLength = 32;
+    }
     
-    const rsaPrivateKey = await this.importPrivateKey(this.privateKey, "sign");
+    try {
+      const rsaPrivateKey = JSON.parse(decode(privateKey));
+      const key: CryptoKey = await getCrypto().subtle.importKey(
+        "jwk",
+        rsaPrivateKey,
+        options,
+        false,
+        [type]
+      );
 
-    return await getCrypto().subtle.sign(
-      {
-      name: "RSA-PSS",
-      saltLength: 32,
-      },
-      rsaPrivateKey,
-      data
-    );
+      return key;
+    } catch (error) {
+      throw new Error(`Failed to import private key: ${error}`);
+    }
   };
 
-  private importPublicKey = async (publicKey: string, type: "encrypt" | "verify") => {
-    return await getCrypto().subtle.importKey(
-      "spki",
-      new Uint8Array([...publicKey].map(c => c.charCodeAt(0))),
-      {
-        name: "encrypt" === type ? "RSA-OAEP" : "RSA-PSS",
-        hash: "SHA-256",
-      },
-      true,
-      [type]
-    );
+  private importPublicKey = async (publicKey: string, type: "encrypt" | "verify"): Promise<CryptoKey> => {
+    const options: { [key: string]: any } = {
+      name: "encrypt" === type ? "RSA-OAEP" : "RSA-PSS",
+      hash: "SHA-256",
+    };
+
+    if (type === "verify") {
+      options.saltLength = 32;
+    }
+
+    try {
+      const rsaPublicKey = JSON.parse(decode(publicKey));
+      const key: CryptoKey = await getCrypto().subtle.importKey(
+        "jwk",
+        rsaPublicKey,
+        options,
+        false,
+        [type]
+      );
+
+      return key;
+    } catch (error) {
+      throw new Error(`Failed to import public key: ${error}`);
+    }
   };
 
   public encryptMessage = async (message: string, userId: string) => {
@@ -134,7 +182,7 @@ class RSAMessage {
       throw new Error("Public key not found for user");
     }
   
-    const publicKey = await this.importPublicKey(publicKeyRaw, "encrypt");
+    const publicKey = await this.importPublicKey(publicKeyRaw.encrypt, "encrypt");
 
     const encoder = getTextEncoder();
     const data = encoder.encode(message);
@@ -144,8 +192,8 @@ class RSAMessage {
     const iv = getCrypto().getRandomValues(new Uint8Array(12)); // 12-byte IV for AES-GCM
     const encryptedMessage = await getCrypto().subtle.encrypt(
       {
-      name: "AES-GCM",
-      iv,
+        name: "AES-GCM",
+        iv,
       },
       aesKey,
       data
@@ -155,7 +203,7 @@ class RSAMessage {
     const aesKeyData = await getCrypto().subtle.exportKey("raw", aesKey);
     const encryptedAESKey = await getCrypto().subtle.encrypt(
       {
-      name: "RSA-OAEP",
+        name: "RSA-OAEP",
       },
       publicKey,
       aesKeyData
@@ -171,34 +219,7 @@ class RSAMessage {
     } as IRSAEncryptedMessage;
   }
 
-  public verifySignature = async (signature: Uint8Array, message: string, userId: string) => {
-    const publicKeyRaw = this.publicKeys.get(userId);
-    if (!publicKeyRaw) {
-      throw new Error("Public key not found for user");
-    }
-
-    const publicKey = await this.importPublicKey(publicKeyRaw, "verify");
-
-    const encoder = getTextEncoder();
-    const data = encoder.encode(message);
-  
-    return await getCrypto().subtle.verify(
-      {
-      name: "RSA-PSS",
-      saltLength: 32,
-      },
-      publicKey,
-      signature,
-      data
-    );
-  }
-
-  public decryptMessage = async (encryptedData: IRSAEncryptedMessage, userId: string) => {
-    const publicKey = this.publicKeys.get(userId);
-    if (!publicKey) {
-      throw new Error(`Public key not found for user ${userId}`);
-    }
-
+  public decryptMessage = async (encryptedData: IRSAEncryptedMessage, sender: string) => {
     const { iv, encryptedMessage, encryptedAESKey, signature } = encryptedData;
     let privateKey: any = "";
 
@@ -217,7 +238,7 @@ class RSAMessage {
           name: "RSA-OAEP",
         },
         privateKey,
-        encryptedAESKey
+        new Uint8Array(encryptedAESKey)
       );
     }
     catch (error) {
@@ -248,7 +269,7 @@ class RSAMessage {
           iv,
         },
         aesKey,
-        encryptedMessage
+        new Uint8Array(encryptedMessage)
       );
     }
     catch (error) {
@@ -259,7 +280,7 @@ class RSAMessage {
       const decoder = getTextDecoder();
       const message = decoder.decode(decryptedMessage);
     
-      const verified = await this.verifySignature(signature, message, userId);
+      const verified = await this.verifySignature(signature, message, sender);
       
       if (!verified) {
         throw new Error("Signature verification failed");
@@ -272,9 +293,62 @@ class RSAMessage {
     }
   };
 
-  public setPublicKey(userId: string, publicKey: string) {
-    publicKey = atob(publicKey);
-    this.publicKeys.set(userId, publicKey);
+  public signMessage = async (message: string) => {
+    const encoder = getTextEncoder();
+    const data = encoder.encode(message);
+    
+    try {
+      const privateKey = await this.importPrivateKey(this.signKey, "sign");
+      const signature: Uint8Array = await getCrypto().subtle.sign(
+        {
+          name: "RSA-PSS",
+          saltLength: 32,
+        },
+        privateKey,
+        data
+      );
+
+      return signature;
+    }
+    catch (error) {
+      throw new Error(`Failed to sign message: ${error}`);
+    }
+  };
+
+  public verifySignature = async (signature: ArrayBuffer, message: string, userId: string) => {
+    const publicKeyRaw = this.publicKeys.get(userId);
+    if (!publicKeyRaw) {
+      throw new Error("Public key not found for user");
+    }
+
+    try {
+      const publicKey = await this.importPublicKey(publicKeyRaw.verify, "verify");
+
+      const encoder = getTextEncoder();
+      const data = encoder.encode(message);
+    
+      const verified: boolean = await getCrypto().subtle.verify(
+        {
+          name: "RSA-PSS",
+          saltLength: 32,
+        },
+        publicKey,
+        new Uint8Array(signature),
+        data
+      );
+
+      return verified;
+    }
+    catch (error) {
+      throw new Error(`Failed to verify signature: ${error}`);
+    }
+  }
+
+  public setPublicKey(userId: string, publicKey: string, verifyKey: string) {
+    if (!userId || !publicKey || !verifyKey) {
+      throw new Error("Invalid arguments");
+    }
+    this.publicKeys.set(userId, { encrypt: publicKey, verify: verifyKey });
   }
 
   public hasPublicKey(userId: string): boolean {
@@ -282,21 +356,21 @@ class RSAMessage {
   }
 
   public exportEncryptedMessage(message: IRSAEncryptedMessage): string {
-    return btoa(JSON.stringify({
+    return encode(JSON.stringify({
       iv: String.fromCharCode(...message.iv),
-      encryptedMessage: String.fromCharCode(...new Uint8Array(message.encryptedMessage)),
-      encryptedAESKey: String.fromCharCode(...new Uint8Array(message.encryptedAESKey)),
-      signature: String.fromCharCode(...new Uint8Array(message.signature))
+      encryptedMessage: bufferToBase64(message.encryptedMessage),
+      encryptedAESKey: bufferToBase64(message.encryptedAESKey),
+      signature: bufferToBase64(message.signature)
     }));
   }
   
   public importEncryptedMessage(encoded: string): IRSAEncryptedMessage {
-    const decoded = JSON.parse(atob(encoded));
+    const decoded = JSON.parse(decode(encoded));
     return {
       iv: new Uint8Array([...decoded.iv].map(c => c.charCodeAt(0))),
-      encryptedMessage: new Uint8Array([...decoded.encryptedMessage].map(c => c.charCodeAt(0))),
-      encryptedAESKey: new Uint8Array([...decoded.encryptedAESKey].map(c => c.charCodeAt(0))),
-      signature: new Uint8Array([...decoded.signature].map(c => c.charCodeAt(0)))
+      encryptedMessage: base64ToBuffer(decoded.encryptedMessage),
+      encryptedAESKey: base64ToBuffer(decoded.encryptedAESKey),
+      signature: base64ToBuffer(decoded.signature)
     };
   }
 }

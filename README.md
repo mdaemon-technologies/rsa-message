@@ -1,4 +1,4 @@
-# @mdaemon/rsa-message - RSA message encryption using webcrypto or node crypto
+# @mdaemon/rsa-message - RSA message encryption, signing, decryption, and verification using webcrypto or node crypto
 [![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmdaemon-technologies%2Frsa-message%2Fmain%2Fpackage.json&query=%24.version&prefix=v&label=npm&color=blue)](https://www.npmjs.com/package/@mdaemon/rsa-message) [![Static Badge](https://img.shields.io/badge/node-v18%2B-blue?style=flat&label=node&color=blue)](https://nodejs.org) [![install size](https://packagephobia.com/badge?p=@mdaemon/rsa-message)](https://packagephobia.com/result?p=@mdaemon/rsa-message) [![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmdaemon-technologies%2Frsa-message%2Fmain%2Fpackage.json&query=%24.license&prefix=v&label=license&color=green)](https://github.com/mdaemon-technologies/rsa-message/blob/main/LICENSE) [![Node.js CI](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml/badge.svg)](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml)
 
 [ [@mdaemon/rsa-message on npm](https://www.npmjs.com/package/@mdaemon/rsa-message "npm") ]
@@ -37,20 +37,28 @@ import RSAMessage from "@mdaemon/emitter/dist/rsa-message.mjs";
 ## Usage
 
 ```js
-// Initialize PGP for a user
-const rsa = new RSAMessage('user@example.com');
-const publicKey = await rsa.init();
+// Initialize RSA for a user
+const sender = new RSAMessage();
+const { publicKey, verifyKey } = await sender.init();
 
-// Store public key from another user to use for encryption
-rsa.setPublicKey('otherUserId', theirPublicKey);
+const recipient = new RSAMessage();
+const { publicKey: theirPublicKey, verifyKey: theirVerifyKey } = await recipient.init();
+// Store public key from another user to use for encryption and verification
+sender.setPublicKey('otherUserId', theirPublicKey, theirVerifyKey);
+recipient.setPublicKey('senderId', publicKey, verifyKey);
 
 // Encrypt a message
 const encrypted = await rsa.encryptMessage('Hello, World!', 'otherUserId');
 
-// Decrypt a message
-const decrypted = await rsa.decryptMessage(encryptedMessage, 'senderId');
-```
+// Encode a message for transport
+const encoded = rsa.exportEncryptedMessage(encrypted);
 
+// Decode a message from transport
+const decoded = rsa.importEncryptedMessage(encoded);
+
+// Decrypt a message
+const decrypted = await rsa.decryptMessage(decoded, 'senderId');
+```
 
 ## API Reference
 
@@ -69,10 +77,29 @@ Getter that returns the base64 encoded public key.
 ### `privatekey: string`
 Getter that returns the base64 encoded private key.
 
-### `setPublicKey(userId: string, publicKey: string): void`
+### `verifykey: string`
+Getter that returns the base64 encoded verification key used for signature verification.
+
+### `signkey: string`
+Getter that returns the base64 encoded signing key used for creating message signatures.
+
+### `signMessage(message: string): Promise<ArrayBuffer>`
+Signs a message using the private signing key.
+- `message`: The message to sign
+- Returns: Signature as ArrayBuffer
+
+### `verifySignature(signature: ArrayBuffer, message: string, userId: string): Promise<boolean>`
+Verifies a message signature using the sender's public verification key.
+- `signature`: The signature to verify as ArrayBuffer
+- `message`: The original message that was signed
+- `userId`: The sender's user ID
+- Returns: Promise resolving to true if signature is valid, false otherwise
+
+### `setPublicKey(userId: string, publicKey: string, verifyKey: string): void`
 Stores another user's public key.
 - `userId`: Unique identifier for the other user
 - `publicKey`: Base64 encoded public key
+- `verifyKey`: Base64 encoded verification key
 
 ### `hasPublicKey(userId: string): boolean`
 Checks if a user's public key is stored.
@@ -102,11 +129,11 @@ Imports a base64 encoded encrypted message string back into an encrypted message
 - Returns: Decoded IRSAEncryptedMessage object containing iv, encryptedMessage, encryptedAESKey and signature
 
 ## Security Features
-
-- Uses ECC (Elliptic Curve Cryptography) for key generation
+- Uses RSA-OAEP for encryption and RSA-PSS for signatures
+- AES-GCM for symmetric message encryption
 - Implements message signing and signature verification
-- Automatic key pair generation with random passphrase
 - Base64 encoding for message transport
+
 # License #
 
 Published under the [LGPL-2.1 license](https://github.com/mdaemon-technologies/rsa-message/blob/main/LICENSE "LGPL-2.1 License").
