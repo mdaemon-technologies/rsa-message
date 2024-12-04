@@ -12,8 +12,10 @@ export default class RSAMessage {
     get privatekey(): string;
     get signkey(): string;
     init(publicKey?: string, privateKey?: string, verifyKey?: string, signKey?: string): Promise<{ publicKey: string; verifyKey: string }>;
-    setPublicKey(userId: string, publicKey: string, verifyKey: string): void;
+    setPublicKey(userId: string, publicKey: string, verifyKey?: string): void;
+    setVerifyKey(userId: string, verifyKey: string): void;
     hasPublicKey(userId: string): boolean;
+    hasVerifyKey(userId: string): boolean;
     signMessage(message: string): Promise<ArrayBuffer>;
     encryptMessage(message: string, userId: string): Promise<IRSAEncryptedMessage>;
     verifySignature(signature: ArrayBuffer, message: string, userId: string): Promise<boolean>;

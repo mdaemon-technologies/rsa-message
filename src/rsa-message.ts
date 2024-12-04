@@ -53,7 +53,8 @@ class RSAMessage {
   private publicKey: string;
   private verifyKey: string;
   private signKey: string;
-  private publicKeys: Map<string, { encrypt: string, verify: string }> = new Map();
+  private publicKeys: Map<string, string> = new Map();
+  private verifyKeys: Map<string, string> = new Map();
 
   constructor() {
     this.privateKey = "";
@@ -182,7 +183,7 @@ class RSAMessage {
       throw new Error("Public key not found for user");
     }
   
-    const publicKey = await this.importPublicKey(publicKeyRaw.encrypt, "encrypt");
+    const publicKey = await this.importPublicKey(publicKeyRaw, "encrypt");
 
     const encoder = getTextEncoder();
     const data = encoder.encode(message);
@@ -293,13 +294,13 @@ class RSAMessage {
     }
   };
 
-  public signMessage = async (message: string) => {
+  public signMessage = async (message: string): Promise<ArrayBuffer> => {
     const encoder = getTextEncoder();
     const data = encoder.encode(message);
     
     try {
       const privateKey = await this.importPrivateKey(this.signKey, "sign");
-      const signature: Uint8Array = await getCrypto().subtle.sign(
+      const signature: ArrayBuffer = await getCrypto().subtle.sign(
         {
           name: "RSA-PSS",
           saltLength: 32,
@@ -316,13 +317,13 @@ class RSAMessage {
   };
 
   public verifySignature = async (signature: ArrayBuffer, message: string, userId: string) => {
-    const publicKeyRaw = this.publicKeys.get(userId);
+    const publicKeyRaw = this.verifyKeys.get(userId);
     if (!publicKeyRaw) {
       throw new Error("Public key not found for user");
     }
 
     try {
-      const publicKey = await this.importPublicKey(publicKeyRaw.verify, "verify");
+      const publicKey = await this.importPublicKey(publicKeyRaw, "verify");
 
       const encoder = getTextEncoder();
       const data = encoder.encode(message);
@@ -344,15 +345,29 @@ class RSAMessage {
     }
   }
 
-  public setPublicKey(userId: string, publicKey: string, verifyKey: string) {
-    if (!userId || !publicKey || !verifyKey) {
+  public setPublicKey(userId: string, publicKey: string, verifyKey?: string) { //backwards compatible
+    if (!userId || !publicKey) {
       throw new Error("Invalid arguments");
     }
-    this.publicKeys.set(userId, { encrypt: publicKey, verify: verifyKey });
+    this.publicKeys.set(userId, publicKey);
+    if (verifyKey) {
+      this.verifyKeys.set(userId, verifyKey);
+    }
+  }
+
+  public setVerifyKey(userId: string, verifyKey: string) {
+    if (!userId || !verifyKey) {
+      throw new Error("Invalid arguments");
+    }
+    this.verifyKeys.set(userId, verifyKey);
   }
 
   public hasPublicKey(userId: string): boolean {
     return this.publicKeys.has(userId);
+  }
+
+  public hasVerifyKey(userId: string): boolean {
+    return this.verifyKeys.has(userId);
   }
 
   public exportEncryptedMessage(message: IRSAEncryptedMessage): string {
