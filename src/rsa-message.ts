@@ -11,7 +11,12 @@ import {
   RSAKeyPair,
   RSAConfig,
   KeyPairOutput,
-  AESConfig
+  AESConfig,
+  ECDHKeyPair,
+  ECDHPublicKey,
+  SharedKeyData,
+  DerivedKeyConfig,
+  ECDHConfig
 } from "./crypto-types";
 import { CryptoOperationError, KeyImportError } from "./error-types";
 
@@ -29,6 +34,9 @@ class RSAMessage {
   private signKey: string;
   private publicKeys: Map<string, string> = new Map();
   private verifyKeys: Map<string, string> = new Map();
+  private ecdhPrivateKey: CryptoKey | null = null;
+  private ecdhPublicKeys: Map<string, CryptoKey> = new Map();
+  private sharedKeys: Map<string, CryptoKey> = new Map();
 
   constructor() {
     this.privateKey = "";
@@ -465,6 +473,267 @@ class RSAMessage {
       encryptedAESKey: base64ToBuffer(decoded.encryptedAESKey),
       signature: base64ToBuffer(decoded.signature)
     };
+  }
+
+  /**
+   * Generates ECDH key pair for key exchange
+   * @returns Promise that resolves with the public key in exportable format
+   * @throws Error if key generation fails
+   */
+  public async generateECDHKeyPair(): Promise<ECDHPublicKey> {
+    try {
+      const keyPair: ECDHKeyPair = await getCrypto().subtle.generateKey(
+        {
+          name: "ECDH",
+          namedCurve: "P-256",
+        },
+        true,
+        ["deriveBits", "deriveKey"]
+      );
+
+      this.ecdhPrivateKey = keyPair.privateKey;
+      
+      const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.publicKey);
+      return { publicKey: encode(JSON.stringify(publicKeyRaw)) };
+    } catch (error) {
+      throw new CryptoOperationError(`Failed to generate ECDH key pair: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'encrypt',
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  /**
+   * Imports another user's ECDH public key for key exchange
+   * @param userId - The ID of the user whose public key to import
+   * @param publicKey - The base64 encoded ECDH public key
+   * @throws Error if key import fails
+   */
+  public async setECDHPublicKey(userId: string, publicKey: string): Promise<void> {
+    try {
+      const publicKeyData = JSON.parse(decode(publicKey));
+      const cryptoKey = await getCrypto().subtle.importKey(
+        "jwk",
+        publicKeyData,
+        {
+          name: "ECDH",
+          namedCurve: "P-256",
+        },
+        false,
+        []
+      );
+      
+      this.ecdhPublicKeys.set(userId, cryptoKey);
+    } catch (error) {
+      throw new KeyImportError(`Failed to import ECDH public key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'public',
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  /**
+   * Derives a shared secret key using ECDH and stores it for the user
+   * @param userId - The ID of the user to derive shared key with
+   * @param salt - Optional salt for key derivation. If not provided, a random salt is generated
+   * @returns The salt used for key derivation
+   * @throws Error if key derivation fails or required keys are missing
+   */
+  public async deriveSharedKey(userId: string, salt?: Uint8Array): Promise<Uint8Array> {
+    if (!this.ecdhPrivateKey) {
+      throw new Error("ECDH private key not generated. Call generateECDHKeyPair() first.");
+    }
+
+    const otherPublicKey = this.ecdhPublicKeys.get(userId);
+    if (!otherPublicKey) {
+      throw new Error(`ECDH public key not found for user: ${userId}`);
+    }
+
+    try {
+      // Generate salt if not provided
+      const keySalt = salt || getCrypto().getRandomValues(new Uint8Array(16));
+
+      // Derive shared secret using ECDH
+      const sharedSecret = await getCrypto().subtle.deriveBits(
+        {
+          name: "ECDH",
+          public: otherPublicKey,
+        } as ECDHConfig,
+        this.ecdhPrivateKey,
+        256 // 256 bits
+      );
+
+      // Derive encryption key using PBKDF2
+      const baseKey = await getCrypto().subtle.importKey(
+        "raw",
+        sharedSecret,
+        "PBKDF2",
+        false,
+        ["deriveKey"]
+      );
+
+      const derivedKey = await getCrypto().subtle.deriveKey(
+        {
+          name: "PBKDF2",
+          salt: keySalt,
+          iterations: 100000,
+          hash: "SHA-256",
+        } as DerivedKeyConfig,
+        baseKey,
+        {
+          name: "AES-GCM",
+          length: 256,
+        },
+        false,
+        ["encrypt", "decrypt"]
+      );
+
+      this.sharedKeys.set(userId, derivedKey);
+      return keySalt;
+    } catch (error) {
+      throw new CryptoOperationError(`Failed to derive shared key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'encrypt',
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  /**
+   * Encrypts a message using a derived shared key
+   * @param message - The plaintext message to encrypt
+   * @param userId - The ID of the user to encrypt for (must have shared key derived)
+   * @returns Object containing the encrypted message components
+   * @throws Error if shared key is not found or encryption fails
+   */
+  public async encryptWithSharedKey(message: string, userId: string): Promise<SharedKeyData> {
+    const sharedKey = this.sharedKeys.get(userId);
+    if (!sharedKey) {
+      throw new Error(`Shared key not found for user: ${userId}. Call deriveSharedKey() first.`);
+    }
+
+    try {
+      const encoder = getTextEncoder();
+      const data = encoder.encode(message);
+      
+      const iv = getCrypto().getRandomValues(new Uint8Array(12)); // 12-byte IV for AES-GCM
+      const salt = getCrypto().getRandomValues(new Uint8Array(16)); // Salt for this encryption
+      
+      const encryptedMessage = await getCrypto().subtle.encrypt(
+        {
+          name: "AES-GCM",
+          iv,
+        } as AESConfig,
+        sharedKey,
+        data
+      );
+
+      return {
+        salt,
+        encryptedMessage,
+        iv,
+      };
+    } catch (error) {
+      throw new CryptoOperationError(`Failed to encrypt with shared key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'encrypt',
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  /**
+   * Decrypts a message using a derived shared key
+   * @param encryptedData - Object containing the encrypted message components
+   * @param userId - The ID of the user who encrypted the message
+   * @returns The decrypted message
+   * @throws Error if shared key is not found or decryption fails
+   */
+  public async decryptWithSharedKey(encryptedData: SharedKeyData, userId: string): Promise<string> {
+    const sharedKey = this.sharedKeys.get(userId);
+    if (!sharedKey) {
+      throw new Error(`Shared key not found for user: ${userId}. Call deriveSharedKey() first.`);
+    }
+
+    try {
+      const { iv, encryptedMessage } = encryptedData;
+      
+      const decryptedMessage = await getCrypto().subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv,
+        } as AESConfig,
+        sharedKey,
+        new Uint8Array(encryptedMessage)
+      );
+
+      const decoder = getTextDecoder();
+      return decoder.decode(decryptedMessage);
+    } catch (error) {
+      throw new CryptoOperationError(`Failed to decrypt with shared key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'decrypt',
+        error instanceof Error ? error : undefined
+      );
+    }
+  }
+
+  /**
+   * Exports shared key encrypted message data to a string format
+   * @param data - The shared key encrypted data object to export
+   * @returns An encoded string representation of the encrypted data
+   */
+  public exportSharedKeyData(data: SharedKeyData): string {
+    return encode(JSON.stringify({
+      salt: String.fromCharCode(...data.salt),
+      encryptedMessage: bufferToBase64(data.encryptedMessage),
+      iv: String.fromCharCode(...data.iv)
+    }));
+  }
+
+  /**
+   * Imports an encoded string back into a shared key data object
+   * @param encoded - The encoded string to import
+   * @returns The decoded SharedKeyData object
+   */
+  public importSharedKeyData(encoded: string): SharedKeyData {
+    const decoded = JSON.parse(decode(encoded));
+    return {
+      salt: new Uint8Array([...decoded.salt].map(c => c.charCodeAt(0))),
+      encryptedMessage: base64ToBuffer(decoded.encryptedMessage),
+      iv: new Uint8Array([...decoded.iv].map(c => c.charCodeAt(0)))
+    };
+  }
+
+  /**
+   * Checks if a shared key exists for a user
+   * @param userId - The ID of the user to check
+   * @returns True if a shared key exists for the user, false otherwise
+   */
+  public hasSharedKey(userId: string): boolean {
+    return this.sharedKeys.has(userId);
+  }
+
+  /**
+   * Checks if an ECDH public key exists for a user
+   * @param userId - The ID of the user to check
+   * @returns True if an ECDH public key exists for the user, false otherwise
+   */
+  public hasECDHPublicKey(userId: string): boolean {
+    return this.ecdhPublicKeys.has(userId);
+  }
+
+  /**
+   * Removes shared key for a user (useful for key rotation)
+   * @param userId - The ID of the user whose shared key to remove
+   */
+  public removeSharedKey(userId: string): void {
+    this.sharedKeys.delete(userId);
+  }
+
+  /**
+   * Removes ECDH public key for a user
+   * @param userId - The ID of the user whose ECDH public key to remove
+   */
+  public removeECDHPublicKey(userId: string): void {
+    this.ecdhPublicKeys.delete(userId);
   }
 }
 

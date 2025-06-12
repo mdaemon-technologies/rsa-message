@@ -1,4 +1,4 @@
-# @mdaemon/rsa-message - RSA message encryption, signing, decryption, and verification using webcrypto or node crypto
+# @mdaemon/rsa-message - RSA message encryption, signing, decryption, verification, and ECDH key exchange using webcrypto or node crypto
 [![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmdaemon-technologies%2Frsa-message%2Fmain%2Fpackage.json&query=%24.version&prefix=v&label=npm&color=blue)](https://www.npmjs.com/package/@mdaemon/rsa-message) [![Static Badge](https://img.shields.io/badge/node-v18%2B-blue?style=flat&label=node&color=blue)](https://nodejs.org) [![install size](https://packagephobia.com/badge?p=@mdaemon/rsa-message)](https://packagephobia.com/result?p=@mdaemon/rsa-message) [![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmdaemon-technologies%2Frsa-message%2Fmain%2Fpackage.json&query=%24.license&prefix=v&label=license&color=green)](https://github.com/mdaemon-technologies/rsa-message/blob/main/LICENSE) [![Node.js CI](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml/badge.svg)](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml)
 
 [ [@mdaemon/rsa-message on npm](https://www.npmjs.com/package/@mdaemon/rsa-message "npm") ]
@@ -58,6 +58,40 @@ const decoded = rsa.importEncryptedMessage(encoded);
 
 // Decrypt a message
 const decrypted = await rsa.decryptMessage(decoded, 'senderId');
+```
+
+### Derived Key Encryption (ECDH + AES-GCM)
+
+For scenarios requiring perfect forward secrecy and efficient symmetric encryption, you can use ECDH key exchange:
+
+```js
+// Initialize RSA instances for both users
+const alice = new RSAMessage();
+const bob = new RSAMessage();
+
+await alice.init();
+await bob.init();
+
+// Generate ECDH key pairs for both users
+const aliceECDHPublicKey = await alice.generateECDHKeyPair();
+const bobECDHPublicKey = await bob.generateECDHKeyPair();
+
+// Exchange ECDH public keys
+alice.setECDHPublicKey('bob', bobECDHPublicKey);
+bob.setECDHPublicKey('alice', aliceECDHPublicKey);
+
+// Derive shared keys
+await alice.deriveSharedKey('bob');
+await bob.deriveSharedKey('alice');
+
+// Encrypt and decrypt messages using shared keys
+const encrypted = await alice.encryptWithSharedKey('Hello, Bob!', 'bob');
+const decrypted = await bob.decryptWithSharedKey(encrypted, 'alice');
+
+// Export/import shared key data for persistence
+const sharedKeyData = alice.exportSharedKeyData('bob');
+// Later, import the shared key data
+alice.importSharedKeyData('bob', sharedKeyData);
 ```
 
 ## API Reference
@@ -128,10 +162,71 @@ Imports a base64 encoded encrypted message string back into an encrypted message
 - `encoded`: Base64 encoded string previously created by exportEncryptedMessage
 - Returns: Decoded IRSAEncryptedMessage object containing iv, encryptedMessage, encryptedAESKey and signature
 
+## Derived Key Encryption Methods (ECDH + PBKDF2)
+
+### `generateECDHKeyPair(): Promise<string>`
+Generates an ECDH key pair for key exchange and returns the public key.
+- Returns: Base64 encoded ECDH public key
+
+### `setECDHPublicKey(userId: string, publicKey: string): Promise<void>`
+Imports and stores another user's ECDH public key for key derivation.
+- `userId`: Unique identifier for the other user
+- `publicKey`: Base64 encoded ECDH public key
+
+### `deriveSharedKey(userId: string, salt?: Uint8Array): Promise<void>`
+Derives a shared AES key using ECDH key exchange and PBKDF2 key derivation.
+- `userId`: The other user's identifier
+- `salt`: Optional salt for key derivation (generates random salt if not provided)
+
+### `encryptWithSharedKey(message: string, userId: string): Promise<string>`
+Encrypts a message using the shared key derived with the specified user.
+- `message`: The message to encrypt
+- `userId`: The user identifier for the shared key
+- Returns: Base64 encoded encrypted message
+
+### `decryptWithSharedKey(encryptedMessage: string, userId: string): Promise<string>`
+Decrypts a message using the shared key derived with the specified user.
+- `encryptedMessage`: Base64 encoded encrypted message
+- `userId`: The user identifier for the shared key
+- Returns: Decrypted message
+
+### `exportSharedKeyData(userId: string): string`
+Exports shared key data for storage or transport.
+- `userId`: The user identifier for the shared key
+- Returns: Base64 encoded shared key data
+
+### `importSharedKeyData(userId: string, data: string): Promise<void>`
+Imports previously exported shared key data.
+- `userId`: The user identifier for the shared key
+- `data`: Base64 encoded shared key data
+
+### `hasSharedKey(userId: string): boolean`
+Checks if a shared key exists for the specified user.
+- `userId`: The user identifier
+- Returns: `true` if shared key exists, `false` otherwise
+
+### `hasECDHPublicKey(userId: string): boolean`
+Checks if an ECDH public key is stored for the specified user.
+- `userId`: The user identifier
+- Returns: `true` if ECDH public key exists, `false` otherwise
+
+### `removeSharedKey(userId: string): boolean`
+Removes the shared key for the specified user.
+- `userId`: The user identifier
+- Returns: `true` if key was removed, `false` if key didn't exist
+
+### `removeECDHPublicKey(userId: string): boolean`
+Removes the ECDH public key for the specified user.
+- `userId`: The user identifier
+- Returns: `true` if key was removed, `false` if key didn't exist
+
 ## Security Features
 - Uses RSA-OAEP for encryption and RSA-PSS for signatures
 - AES-GCM for symmetric message encryption
 - Implements message signing and signature verification
+- ECDH key exchange with P-256 elliptic curve for perfect forward secrecy
+- PBKDF2 key derivation with 100,000 iterations for enhanced security
+- Derived key encryption using AES-GCM with 256-bit keys
 - Base64 encoding for message transport
 
 # License #
