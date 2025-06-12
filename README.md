@@ -94,6 +94,54 @@ const sharedKeyData = alice.exportSharedKeyData('bob');
 alice.importSharedKeyData('bob', sharedKeyData);
 ```
 
+### Master AES Key Encryption (Group/Room Scenarios)
+
+For scenarios where multiple users need to share the same encryption key (like group chats or rooms), you can use the master AES key functionality:
+
+```js
+// Initialize RSA instances for group members
+const admin = new RSAMessage();
+const member1 = new RSAMessage();
+const member2 = new RSAMessage();
+
+await admin.init();
+await member1.init();
+await member2.init();
+
+// Set up public keys for encryption/verification
+admin.setPublicKey('self', admin.publickey, admin.verifykey);
+admin.setPublicKey('member1', member1.publickey, member1.verifykey);
+admin.setPublicKey('member2', member2.publickey, member2.verifykey);
+
+// Admin generates a master AES key for the group
+const masterKey = await admin.generateAndSetMasterAESKey();
+
+// Admin shares the master key with group members
+const keyForMember1 = await admin.exportMasterAESKeyForUser('member1');
+const keyForMember2 = await admin.exportMasterAESKeyForUser('member2');
+
+// Members receive and set up the master key
+member1.setPublicKey('admin', admin.publickey, admin.verifykey);
+member1.setVerifyKey('admin', admin.verifykey);
+await member1.setMasterAESKeyFromEncrypted(keyForMember1, 'admin');
+
+member2.setPublicKey('admin', admin.publickey, admin.verifykey);
+member2.setVerifyKey('admin', admin.verifykey);
+await member2.setMasterAESKeyFromEncrypted(keyForMember2, 'admin');
+
+// Now all members can encrypt/decrypt using the shared master key
+const message = 'Hello, group!';
+
+// Using dedicated master key methods (no RSA overhead)
+const encrypted = await admin.encryptWithMasterAESKey(message);
+const decrypted1 = await member1.decryptWithMasterAESKey(encrypted, 'admin');
+const decrypted2 = await member2.decryptWithMasterAESKey(encrypted, 'admin');
+
+// Or using regular methods with master key flag (backwards compatible)
+const encrypted2 = await member1.encryptMessage(message, 'member2', true);
+const decrypted3 = await member2.decryptMessage(encrypted2, 'member1', true);
+```
+
 ## API Reference
 
 ### `new RSAMessage()`
@@ -140,16 +188,18 @@ Checks if a user's public key is stored.
 - `userId`: Unique identifier for the user
 - Returns: `true` if the user's public key is stored, `false` otherwise
 
-### `encryptMessage(message: string, userId: string): Promise<string>`
+### `encryptMessage(message: string, userId: string, useMasterKey?: boolean): Promise<IRSAEncryptedMessage>`
 Encrypts and signs a message for a specific user.
 - `message`: The message to encrypt
 - `userId`: The recipient's user ID
-- Returns: Base64 encoded encrypted message
+- `useMasterKey`: Optional - if true and master key is set, uses master AES key instead of generating new AES key
+- Returns: Encrypted message object
 
-### `decryptMessage(encryptedMessage: string, userId: string): Promise<string>`
+### `decryptMessage(encryptedData: IRSAEncryptedMessage, sender: string, useMasterKey?: boolean): Promise<string>`
 Decrypts and verifies a message from a specific user.
-- `encryptedMessage`: Base64 encoded encrypted message
-- `userId`: The sender's user ID
+- `encryptedData`: The encrypted message object
+- `sender`: The sender's user ID
+- `useMasterKey`: Optional - if true and master key is set, uses master AES key for decryption
 - Returns: Decrypted message
 
 ### `exportEncryptedMessage(message: IRSAEncryptedMessage): string`
@@ -161,6 +211,61 @@ Exports an encrypted message object to a base64 encoded string for transport or 
 Imports a base64 encoded encrypted message string back into an encrypted message object.
 - `encoded`: Base64 encoded string previously created by exportEncryptedMessage
 - Returns: Decoded IRSAEncryptedMessage object containing iv, encryptedMessage, encryptedAESKey and signature
+
+## Master AES Key Methods
+
+The master AES key functionality allows for efficient group or room-based encryption scenarios where multiple users share the same AES key, eliminating the need for RSA encryption/decryption of individual AES keys.
+
+### `generateAndSetMasterAESKey(): Promise<string>`
+Generates a new AES master key, encrypts it with the current user's RSA public key, and stores it.
+- Returns: Base64 encoded encrypted master AES key
+
+### `setEncryptedMasterAESKey(encryptedKey: string): void`
+Sets an encrypted master AES key (encrypted with this user's RSA public key).
+- `encryptedKey`: Base64 encoded encrypted master AES key
+
+### `getDecryptedMasterAESKey(): Promise<CryptoKey>`
+Decrypts and returns the master AES key as a CryptoKey for direct use.
+- Returns: The decrypted AES-GCM CryptoKey
+- Throws: Error if no master key is set
+
+### `exportMasterAESKeyForUser(userId: string): Promise<string>`
+Encrypts the current master AES key with another user's RSA public key for sharing.
+- `userId`: The user ID to encrypt the master key for
+- Returns: Base64 encoded encrypted master AES key for the specified user
+- Throws: Error if no master key is set or user's public key not found
+
+### `setMasterAESKeyFromEncrypted(encryptedKey: string, encryptor?: string): Promise<void>`
+Sets the master AES key from an encrypted key received from another user.
+- `encryptedKey`: Base64 encoded encrypted master AES key
+- `encryptor`: Optional user ID who encrypted the key (defaults to "self")
+
+### `encryptWithMasterAESKey(message: string): Promise<IRSAEncryptedMessage>`
+Encrypts a message using the master AES key (no RSA encryption of AES key).
+- `message`: The plaintext message to encrypt
+- Returns: Encrypted message object without encryptedAESKey field
+- Throws: Error if no master key is set
+
+### `decryptWithMasterAESKey(encryptedData: IRSAEncryptedMessage, sender: string): Promise<string>`
+Decrypts a message using the master AES key (no RSA decryption needed).
+- `encryptedData`: The encrypted message object (should not include encryptedAESKey)
+- `sender`: The user ID who sent the message (for signature verification)
+- Returns: Decrypted message
+- Throws: Error if no master key is set or signature verification fails
+
+### Enhanced `encryptMessage(message: string, userId: string, useMasterKey?: boolean): Promise<IRSAEncryptedMessage>`
+The standard encrypt method now supports an optional parameter to use the master AES key.
+- `message`: The message to encrypt
+- `userId`: The recipient's user ID
+- `useMasterKey`: If true and master key is set, uses master AES key instead of generating new AES key
+- Returns: Encrypted message object (encryptedAESKey will be undefined if master key is used)
+
+### Enhanced `decryptMessage(encryptedData: IRSAEncryptedMessage, sender: string, useMasterKey?: boolean): Promise<string>`
+The standard decrypt method now supports an optional parameter to use the master AES key.
+- `encryptedData`: The encrypted message object
+- `sender`: The sender's user ID
+- `useMasterKey`: If true and master key is set, uses master AES key for decryption
+- Returns: Decrypted message
 
 ## Derived Key Encryption Methods (ECDH + PBKDF2)
 
@@ -224,6 +329,7 @@ Removes the ECDH public key for the specified user.
 - Uses RSA-OAEP for encryption and RSA-PSS for signatures
 - AES-GCM for symmetric message encryption
 - Implements message signing and signature verification
+- Master AES key functionality for efficient group/room encryption scenarios
 - ECDH key exchange with P-256 elliptic curve for perfect forward secrecy
 - PBKDF2 key derivation with 100,000 iterations for enhanced security
 - Derived key encryption using AES-GCM with 256-bit keys

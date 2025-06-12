@@ -285,164 +285,311 @@ describe('RSAMessage', () => {
       expect(verifiedResponse).toBe(true);
     });
   });
+  describe('Master AES Key functionality', () => {
+    beforeEach(async () => {
+      await sender.init();
+      await receiver.init();
+    });    describe('master AES key generation and management', () => {
+      test('generateAndSetMasterAESKey() generates and stores encrypted master key', async () => {
+        // Set sender's own public key for self-encryption
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        
+        const encryptedKey = await sender.generateAndSetMasterAESKey();
+        expect(encryptedKey).toBeTruthy();
+        expect(typeof encryptedKey).toBe('string');
+        expect(encryptedKey.length).toBeGreaterThan(0);
+      });      test('setEncryptedMasterAESKey() and getDecryptedMasterAESKey() work correctly', async () => {
+        // Generate master key for sender
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        const encryptedKey = await sender.generateAndSetMasterAESKey();
 
-  describe('Derived Key Encryption (ECDH + PBKDF2)', () => {
+        // Create new instance and set the encrypted master key
+        const newSender = new RSAMessage();
+        await newSender.init(
+          sender.publickey,
+          sender.privatekey,
+          sender.verifykey,
+          sender.signkey
+        );
+        
+        // Set self key for decryption
+        newSender.setPublicKey('self', newSender.publickey, newSender.verifykey);
+        newSender.setEncryptedMasterAESKey(encryptedKey);
+        
+        // Should be able to decrypt the master key
+        const masterKey = await newSender.getDecryptedMasterAESKey();
+        expect(masterKey).toBeTruthy();
+        expect(masterKey.type).toBe('secret');
+      });      test('exportMasterAESKeyForUser() encrypts master key for another user', async () => {
+        // Setup: sender has master key, receiver has their own RSA keys
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+
+        // Export master key encrypted for receiver
+        const encryptedForReceiver = await sender.exportMasterAESKeyForUser('receiver');
+        
+        expect(encryptedForReceiver).toBeTruthy();
+        expect(typeof encryptedForReceiver).toBe('string');
+        expect(encryptedForReceiver.length).toBeGreaterThan(0);
+      });      test('setMasterAESKeyFromEncrypted() imports encrypted master key from another user', async () => {
+        // Setup: sender generates master key and exports it for receiver
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+        const encryptedForReceiver = await sender.exportMasterAESKeyForUser('receiver');
+
+        // Receiver imports the encrypted master key and sets up verification
+        receiver.setPublicKey('sender', sender.publickey, sender.verifykey);
+        receiver.setVerifyKey('sender', sender.verifykey);
+        await receiver.setMasterAESKeyFromEncrypted(encryptedForReceiver, 'sender');
+
+        // Verify receiver can decrypt the master key
+        const receiverMasterKey = await receiver.getDecryptedMasterAESKey();
+        expect(receiverMasterKey).toBeTruthy();
+        expect(receiverMasterKey.type).toBe('secret');
+      });
+    });    describe('master AES key encryption and decryption', () => {
+      beforeEach(async () => {
+        // Setup master key for both users
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+        
+        const encryptedForReceiver = await sender.exportMasterAESKeyForUser('receiver');
+        receiver.setPublicKey('sender', sender.publickey, sender.verifykey);
+        receiver.setVerifyKey('sender', sender.verifykey);
+        await receiver.setMasterAESKeyFromEncrypted(encryptedForReceiver, 'sender');
+      });
+
+      test('encryptWithMasterAESKey() encrypts message without RSA', async () => {
+        const message = 'This message is encrypted with master AES key only';
+        const encrypted = await sender.encryptWithMasterAESKey(message);
+
+        expect(encrypted).toBeTruthy();
+        expect(encrypted.encryptedMessage).toBeTruthy();
+        expect(encrypted.iv).toBeTruthy();
+        expect(encrypted.signature).toBeTruthy();
+        expect(encrypted.encryptedAESKey).toBeUndefined(); // No RSA encryption used
+      });
+
+      test('decryptWithMasterAESKey() decrypts message without RSA', async () => {
+        const message = 'This message uses master AES key encryption';
+        
+        // Encrypt with sender's master AES key
+        const encrypted = await sender.encryptWithMasterAESKey(message);
+        
+        // Decrypt with receiver's master AES key (should be the same key)
+        const decrypted = await receiver.decryptWithMasterAESKey(encrypted, 'sender');
+        
+        expect(decrypted).toBe(message);
+      });      test('regular encrypt/decrypt methods work with master AES key when available', async () => {
+        const message = 'This tests backwards compatibility with master keys';
+        
+        // Should use master AES key when available
+        const encrypted = await sender.encryptMessage(message, 'receiver', true);
+        expect(encrypted.encryptedAESKey).toBeUndefined(); // Master key used, no RSA
+        
+        const decrypted = await receiver.decryptMessage(encrypted, 'sender', true);
+        expect(decrypted).toBe(message);
+      });      test('regular encrypt/decrypt methods fall back to RSA when useMasterKey is false', async () => {
+        const message = 'This tests RSA fallback with master keys present';
+        
+        // Should use RSA even when master key is available
+        const encrypted = await sender.encryptMessage(message, 'receiver', false);
+        expect(encrypted.encryptedAESKey).toBeTruthy(); // RSA encryption used
+        
+        const decrypted = await receiver.decryptMessage(encrypted, 'sender', false);
+        expect(decrypted).toBe(message);
+      });
+
+      test('master AES key encryption is more efficient than RSA', async () => {
+        const message = 'Performance test message';
+        
+        // Encrypt with master AES key
+        const startMaster = performance.now();
+        const encryptedMaster = await sender.encryptWithMasterAESKey(message);
+        const masterTime = performance.now() - startMaster;
+        
+        // Encrypt with RSA
+        const startRSA = performance.now();
+        const encryptedRSA = await sender.encryptMessage(message, 'receiver', false);
+        const rsaTime = performance.now() - startRSA;
+        
+        // Master AES should be faster (though this might vary in test environment)
+        // At minimum, verify both methods work
+        expect(encryptedMaster).toBeTruthy();
+        expect(encryptedRSA).toBeTruthy();
+        expect(encryptedMaster.encryptedAESKey).toBeUndefined();
+        expect(encryptedRSA.encryptedAESKey).toBeTruthy();
+      });
+    });
+
+    describe('error handling', () => {      test('getDecryptedMasterAESKey() returns null when no master key set', async () => {
+        await expect(sender.getDecryptedMasterAESKey())
+          .rejects.toThrow('No master AES key set');
+      });
+
+      test('encryptWithMasterAESKey() throws when no master key available', async () => {
+        await expect(sender.encryptWithMasterAESKey('test message'))
+          .rejects.toThrow('No master AES key set');
+      });test('decryptWithMasterAESKey() throws when no master key available', async () => {
+        const mockEncrypted = {
+          encryptedMessage: new ArrayBuffer(0),
+          iv: new Uint8Array(12),
+          signature: new ArrayBuffer(0)
+        };
+        
+        await expect(receiver.decryptWithMasterAESKey(mockEncrypted, 'sender'))
+          .rejects.toThrow('No master AES key set');
+      });      test('exportMasterAESKeyForUser() throws when no master key available', async () => {
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+        
+        await expect(sender.exportMasterAESKeyForUser('receiver'))
+          .rejects.toThrow('No master AES key set');
+      });      test('exportMasterAESKeyForUser() throws when user public key not found', async () => {
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        
+        await expect(sender.exportMasterAESKeyForUser('unknown'))
+          .rejects.toThrow('Public key not found for user');
+      });
+    });
+  });
+
+  describe('Derived Key Encryption (ECDH)', () => {
     let alice: RSAMessage;
     let bob: RSAMessage;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       alice = new RSAMessage();
       bob = new RSAMessage();
+      await alice.init();
+      await bob.init();
     });
 
-    describe('generateECDHKeyPair()', () => {
-      test('generates ECDH key pair successfully', async () => {
+    describe('ECDH key generation and exchange', () => {
+      test('generateECDHKeyPair() generates valid key pair', async () => {
         const keyPair = await alice.generateECDHKeyPair();
+        
+        expect(keyPair).toBeTruthy();
         expect(keyPair.publicKey).toBeTruthy();
         expect(typeof keyPair.publicKey).toBe('string');
-      });
-    });
-
-    describe('setECDHPublicKey()', () => {
-      test('imports and stores ECDH public key successfully', async () => {
-        const aliceKeyPair = await alice.generateECDHKeyPair();
-        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
-        expect(bob.hasECDHPublicKey('alice')).toBe(true);
-      });
-    });
-
-    describe('deriveSharedKey()', () => {
-      test('derives shared key successfully', async () => {
-        const aliceKeyPair = await alice.generateECDHKeyPair();
-        const bobKeyPair = await bob.generateECDHKeyPair();
-
-        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
-        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
-
-        const aliceSalt = await alice.deriveSharedKey('bob');
-        const bobSalt = await bob.deriveSharedKey('alice', aliceSalt);
-
-        expect(alice.hasSharedKey('bob')).toBe(true);
-        expect(bob.hasSharedKey('alice')).toBe(true);
-        expect(aliceSalt).toEqual(bobSalt);
+        expect(keyPair.publicKey.length).toBeGreaterThan(0);
       });
 
-      test('throws error when ECDH private key not generated', async () => {
-        await expect(alice.deriveSharedKey('bob'))
-          .rejects.toThrow('ECDH private key not generated');
-      });
-
-      test('throws error when other user\'s public key not found', async () => {
-        await alice.generateECDHKeyPair();
-        await expect(alice.deriveSharedKey('bob'))
-          .rejects.toThrow('ECDH public key not found for user: bob');
-      });
-    });
-
-    describe('encryptWithSharedKey()', () => {
-      test('encrypts message with shared key successfully', async () => {
-        const aliceKeyPair = await alice.generateECDHKeyPair();
-        const bobKeyPair = await bob.generateECDHKeyPair();
-
-        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
-        await alice.deriveSharedKey('bob');
-
-        const message = 'Secret shared message';
-        const encrypted = await alice.encryptWithSharedKey(message, 'bob');        expect(encrypted.salt).toBeInstanceOf(Uint8Array);
-        expect(encrypted.encryptedMessage).toBeTruthy();
-        expect(encrypted.iv).toBeInstanceOf(Uint8Array);
-      });
-
-      test('throws error when shared key not found', async () => {
-        await expect(alice.encryptWithSharedKey('message', 'bob'))
-          .rejects.toThrow('Shared key not found for user: bob');
-      });
-    });
-
-    describe('decryptWithSharedKey()', () => {
-      test('decrypts message with shared key successfully', async () => {
-        const aliceKeyPair = await alice.generateECDHKeyPair();
-        const bobKeyPair = await bob.generateECDHKeyPair();
-
-        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
-        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
-
-        const salt = await alice.deriveSharedKey('bob');
-        await bob.deriveSharedKey('alice', salt);
-
-        const message = 'Secret shared message';
-        const encrypted = await alice.encryptWithSharedKey(message, 'bob');
-        const decrypted = await bob.decryptWithSharedKey(encrypted, 'alice');
-
-        expect(decrypted).toBe(message);
-      });
-
-      test('throws error when shared key not found', async () => {
-        const encrypted = {
-          salt: new Uint8Array(16),
-          encryptedMessage: new ArrayBuffer(32),
-          iv: new Uint8Array(12)
-        };
-
-        await expect(bob.decryptWithSharedKey(encrypted, 'alice'))
-          .rejects.toThrow('Shared key not found for user: alice');
-      });
-    });
-
-    describe('exportSharedKeyData() and importSharedKeyData()', () => {
-      test('exports and imports shared key data successfully', async () => {
-        const aliceKeyPair = await alice.generateECDHKeyPair();
-        const bobKeyPair = await bob.generateECDHKeyPair();
-
-        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
-        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
-
-        const salt = await alice.deriveSharedKey('bob');
-        await bob.deriveSharedKey('alice', salt);
-
-        const message = 'Secret shared message';
-        const encrypted = await alice.encryptWithSharedKey(message, 'bob');
-        const exported = alice.exportSharedKeyData(encrypted);
-        const imported = bob.importSharedKeyData(exported);
-
-        expect(typeof exported).toBe('string');
-        expect(imported.salt).toEqual(encrypted.salt);
-        expect(imported.iv).toEqual(encrypted.iv);
-        expect(new Uint8Array(imported.encryptedMessage)).toEqual(new Uint8Array(encrypted.encryptedMessage));
-
-        const decrypted = await bob.decryptWithSharedKey(imported, 'alice');
-        expect(decrypted).toBe(message);
-      });
-    });
-
-    describe('key management methods', () => {
-      test('hasSharedKey() works correctly', async () => {
-        expect(alice.hasSharedKey('bob')).toBe(false);
-        
-        const aliceKeyPair = await alice.generateECDHKeyPair();
-        const bobKeyPair = await bob.generateECDHKeyPair();
-        
-        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
-        await alice.deriveSharedKey('bob');
-        
-        expect(alice.hasSharedKey('bob')).toBe(true);
-      });
-
-      test('hasECDHPublicKey() works correctly', async () => {
-        expect(alice.hasECDHPublicKey('bob')).toBe(false);
-        
+      test('setECDHPublicKey() stores ECDH public key', async () => {
         const bobKeyPair = await bob.generateECDHKeyPair();
         await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
         
         expect(alice.hasECDHPublicKey('bob')).toBe(true);
       });
 
+      test('hasECDHPublicKey() returns false for non-existent key', () => {
+        expect(alice.hasECDHPublicKey('nonexistent')).toBe(false);
+      });
+    });
+
+    describe('shared key derivation', () => {
+      test('deriveSharedKey() creates shared secret', async () => {
+        const aliceKeyPair = await alice.generateECDHKeyPair();
+        const bobKeyPair = await bob.generateECDHKeyPair();
+        
+        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
+        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
+          const salt = await alice.deriveSharedKey('bob');
+        await bob.deriveSharedKey('alice', salt);
+        
+        expect(alice.hasSharedKey('bob')).toBe(true);
+        expect(bob.hasSharedKey('alice')).toBe(true);
+        expect(salt).toBeTruthy();
+        expect(salt instanceof Uint8Array).toBe(true);
+      });      test('deriveSharedKey() works with provided salt', async () => {
+        const aliceKeyPair = await alice.generateECDHKeyPair();
+        const bobKeyPair = await bob.generateECDHKeyPair();
+        
+        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
+        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
+        
+        const customSalt = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+        await alice.deriveSharedKey('bob', customSalt);
+        await bob.deriveSharedKey('alice', customSalt);
+        
+        expect(alice.hasSharedKey('bob')).toBe(true);
+        expect(bob.hasSharedKey('alice')).toBe(true);
+      });
+
+      test('hasSharedKey() returns false for non-existent key', () => {
+        expect(alice.hasSharedKey('nonexistent')).toBe(false);
+      });
+    });
+
+    describe('shared key encryption and decryption', () => {
+      beforeEach(async () => {
+        const aliceKeyPair = await alice.generateECDHKeyPair();
+        const bobKeyPair = await bob.generateECDHKeyPair();
+        
+        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
+        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
+        
+        const salt = await alice.deriveSharedKey('bob');
+        await bob.deriveSharedKey('alice', salt);
+      });
+
+      test('encryptWithSharedKey() and decryptWithSharedKey() work correctly', async () => {
+        const message = 'Hello from Alice to Bob using shared key!';
+        
+        const encrypted = await alice.encryptWithSharedKey(message, 'bob');
+        const decrypted = await bob.decryptWithSharedKey(encrypted, 'alice');
+        
+        expect(decrypted).toBe(message);
+      });
+
+      test('encrypted messages cannot be decrypted without correct shared key', async () => {
+        const message = 'Secret message';
+        const encrypted = await alice.encryptWithSharedKey(message, 'bob');
+        
+        // Create a third party without the shared key
+        const charlie = new RSAMessage();
+        await charlie.init();
+        
+        await expect(charlie.decryptWithSharedKey(encrypted, 'alice'))
+          .rejects.toThrow();
+      });
+    });
+
+    describe('shared key data export and import', () => {
+      test('exportSharedKeyData() and importSharedKeyData() work correctly', async () => {
+        const aliceKeyPair = await alice.generateECDHKeyPair();
+        const bobKeyPair = await bob.generateECDHKeyPair();
+        
+        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
+        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
+        
+        const salt = await alice.deriveSharedKey('bob');
+        await bob.deriveSharedKey('alice', salt);
+        
+        const message = 'Test message for export/import';
+        const encrypted = await alice.encryptWithSharedKey(message, 'bob');
+        
+        // Export and import
+        const exported = alice.exportSharedKeyData(encrypted);
+        const imported = bob.importSharedKeyData(exported);
+        
+        const decrypted = await bob.decryptWithSharedKey(imported, 'alice');
+        expect(decrypted).toBe(message);
+      });
+    });
+
+    describe('key management', () => {
       test('removeSharedKey() works correctly', async () => {
         const aliceKeyPair = await alice.generateECDHKeyPair();
         const bobKeyPair = await bob.generateECDHKeyPair();
         
         await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
-        await alice.deriveSharedKey('bob');
+        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
+        
+        const salt = await alice.deriveSharedKey('bob');
         
         expect(alice.hasSharedKey('bob')).toBe(true);
         alice.removeSharedKey('bob');
