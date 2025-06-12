@@ -61,7 +61,7 @@ class RSAMessage {
     return this.signKey;
   }
 
-  private async generateAESKey() {
+  public async generateAESKey() {
     return await getCrypto().subtle.generateKey(
       {
         name: "AES-GCM",
