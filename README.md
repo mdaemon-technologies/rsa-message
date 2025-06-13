@@ -127,7 +127,8 @@ await member1.setMasterAESKeyFromEncrypted(keyForMember1, 'admin');
 
 member2.setPublicKey('admin', admin.publickey, admin.verifykey);
 member2.setVerifyKey('admin', admin.verifykey);
-await member2.setMasterAESKeyFromEncrypted(keyForMember2, 'admin');
+// Alternative: using setEncryptedMasterAESKey with encryptor parameter
+member2.setEncryptedMasterAESKey(keyForMember2, 'admin');
 
 // Now all members can encrypt/decrypt using the shared master key
 const message = 'Hello, group!';
@@ -220,9 +221,10 @@ The master AES key functionality allows for efficient group or room-based encryp
 Generates a new AES master key, encrypts it with the current user's RSA public key, and stores it.
 - Returns: Base64 encoded encrypted master AES key
 
-### `setEncryptedMasterAESKey(encryptedKey: string): void`
+### `setEncryptedMasterAESKey(encryptedKey: string, encryptor?: string): void`
 Sets an encrypted master AES key (encrypted with this user's RSA public key).
 - `encryptedKey`: Base64 encoded encrypted master AES key
+- `encryptor`: Optional user ID who encrypted the key (defaults to "self")
 
 ### `getDecryptedMasterAESKey(): Promise<CryptoKey>`
 Decrypts and returns the master AES key as a CryptoKey for direct use.
@@ -236,9 +238,11 @@ Encrypts the current master AES key with another user's RSA public key for shari
 - Throws: Error if no master key is set or user's public key not found
 
 ### `setMasterAESKeyFromEncrypted(encryptedKey: string, encryptor?: string): Promise<void>`
-Sets the master AES key from an encrypted key received from another user.
+Sets the master AES key from an encrypted key received from another user and immediately validates it by attempting decryption.
 - `encryptedKey`: Base64 encoded encrypted master AES key
 - `encryptor`: Optional user ID who encrypted the key (defaults to "self")
+
+**Note**: This method is equivalent to `setEncryptedMasterAESKey()` but performs immediate validation by testing decryption. Both methods now accept the same parameters for consistency.
 
 ### `encryptWithMasterAESKey(message: string): Promise<IRSAEncryptedMessage>`
 Encrypts a message using the master AES key (no RSA encryption of AES key).

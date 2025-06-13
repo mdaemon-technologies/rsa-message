@@ -36,7 +36,7 @@ export default class RSAMessage {
     
     // Master AES Key Methods
     generateAndSetMasterAESKey(): Promise<string>;
-    setEncryptedMasterAESKey(encryptedKey: string): void;
+    setEncryptedMasterAESKey(encryptedKey: string, encryptor?: string): void;
     getDecryptedMasterAESKey(): Promise<CryptoKey>;
     exportMasterAESKeyForUser(userId: string): Promise<string>;
     setMasterAESKeyFromEncrypted(encryptedKey: string, encryptor?: string): Promise<void>;

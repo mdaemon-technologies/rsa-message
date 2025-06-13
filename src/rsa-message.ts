@@ -60,33 +60,113 @@ class RSAMessage {
     this.masterAESKeyEncryptor = "self"; // We encrypted it ourselves
     this.masterAESKeyCache = null; // Clear cache
     return exportedEncrypted;
-  }
-  /**
+  }  /**
    * Sets the encrypted master AES key (base64 string, encrypted with this user's publicKey)
    * @param {string} encryptedKey - The encrypted master AES key (base64 string)
+   * @param {string} encryptor - The user ID who encrypted the key (defaults to "self")
    */
-  public setEncryptedMasterAESKey(encryptedKey: string) {
+  public setEncryptedMasterAESKey(encryptedKey: string, encryptor: string = "self") {
     this.encryptedMasterAESKey = encryptedKey;
-    this.masterAESKeyEncryptor = "self"; // Assume self-encrypted if not specified
+    this.masterAESKeyEncryptor = encryptor;
     this.masterAESKeyCache = null; // Clear cache
-  }
-  /**
+  }/**
    * Decrypts and returns the master AES key as a CryptoKey. Always decrypts fresh (no persistent cache).
    * @returns {Promise<CryptoKey>} The decrypted AES-GCM key
    */
   public async getDecryptedMasterAESKey(): Promise<CryptoKey> {
     if (!this.encryptedMasterAESKey) throw new Error("No master AES key set");
-    // Decrypt using the known encryptor
+    // Decrypt using the known encryptor for signature verification, but our own private key for decryption
     const encrypted = this.importEncryptedMessage(this.encryptedMasterAESKey);
-    const decryptedStr = await this.decryptMessage(encrypted, this.masterAESKeyEncryptor || "self");
-    const jwk = JSON.parse(decryptedStr);
-    return await getCrypto().subtle.importKey(
-      "jwk",
-      jwk,
-      { name: "AES-GCM" },
-      true,
-      ["encrypt", "decrypt"]
-    );
+    
+    // Special handling for master AES key: we decrypt with our own private key but verify signature from the encryptor
+    const { iv, encryptedMessage, encryptedAESKey, signature } = encrypted;
+    
+    if (!encryptedAESKey) {
+      throw new Error("Master AES key must have been encrypted with RSA");
+    }
+    
+    // Decrypt the AES key with our own private key
+    let privateKey: CryptoKey;
+    try {
+      privateKey = await this.importPrivateKey(this.privateKey, "decrypt");
+    } catch (error) {
+      throw new Error(`Failed to import private key: ${error}`);
+    }
+
+    let aesKeyData: ArrayBuffer;
+    try {
+      aesKeyData = await getCrypto().subtle.decrypt(
+        {
+          name: "RSA-OAEP",
+        } as RSAConfig,
+        privateKey,
+        new Uint8Array(encryptedAESKey)
+      );
+    } catch (error) {
+      throw new CryptoOperationError(`Failed to decrypt AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'decrypt',
+        error instanceof Error ? error : undefined
+      );
+    }
+
+    // Decrypt the message content with the AES key
+    let aesKey: CryptoKey;
+    try {
+      aesKey = await getCrypto().subtle.importKey(
+        "raw",
+        aesKeyData,
+        "AES-GCM",
+        true,
+        ["decrypt"]
+      );
+    } catch (error) {
+      throw new KeyImportError(`Failed to import AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'private',
+        error instanceof Error ? error : undefined
+      );
+    }
+
+    let decryptedMessage: ArrayBuffer;
+    try {
+      decryptedMessage = await getCrypto().subtle.decrypt(
+        {
+          name: "AES-GCM",
+          iv,
+        } as AESConfig,
+        aesKey,
+        new Uint8Array(encryptedMessage)
+      );
+    } catch (error) {
+      throw new CryptoOperationError(`Failed to decrypt message: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'decrypt',
+        error instanceof Error ? error : undefined
+      );
+    }
+
+    // Verify the signature using the encryptor's verify key
+    try {
+      const decoder = getTextDecoder();
+      const message = decoder.decode(decryptedMessage);
+      const verified = await this.verifySignature(signature, message, this.masterAESKeyEncryptor || "self");
+      if (!verified) {
+        throw new Error("Signature verification failed");
+      }
+      
+      // Parse and return the AES key
+      const jwk = JSON.parse(message);
+      return await getCrypto().subtle.importKey(
+        "jwk",
+        jwk,
+        { name: "AES-GCM" },
+        true,
+        ["encrypt", "decrypt"]
+      );
+    } catch (error) {
+      throw new CryptoOperationError(`Failed to verify signature: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'verify',
+        error instanceof Error ? error : undefined
+      );
+    }
   }
 
   /**

@@ -302,7 +302,7 @@ describe('RSAMessage', () => {
         // Generate master key for sender
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
         const encryptedKey = await sender.generateAndSetMasterAESKey();
-
+        
         // Create new instance and set the encrypted master key
         const newSender = new RSAMessage();
         await newSender.init(
@@ -320,7 +320,25 @@ describe('RSAMessage', () => {
         const masterKey = await newSender.getDecryptedMasterAESKey();
         expect(masterKey).toBeTruthy();
         expect(masterKey.type).toBe('secret');
-      });      test('exportMasterAESKeyForUser() encrypts master key for another user', async () => {
+      });
+
+      test('setEncryptedMasterAESKey() works with encryptor parameter', async () => {
+        // Setup: sender generates master key and exports it for receiver
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+        const encryptedForReceiver = await sender.exportMasterAESKeyForUser('receiver');
+
+        // Receiver sets up keys and uses setEncryptedMasterAESKey with encryptor parameter
+        receiver.setPublicKey('sender', sender.publickey, sender.verifykey);
+        receiver.setVerifyKey('sender', sender.verifykey);
+        receiver.setEncryptedMasterAESKey(encryptedForReceiver, 'sender');
+
+        // Verify receiver can decrypt the master key
+        const receiverMasterKey = await receiver.getDecryptedMasterAESKey();
+        expect(receiverMasterKey).toBeTruthy();
+        expect(receiverMasterKey.type).toBe('secret');
+      });test('exportMasterAESKeyForUser() encrypts master key for another user', async () => {
         // Setup: sender has master key, receiver has their own RSA keys
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
         await sender.generateAndSetMasterAESKey();
