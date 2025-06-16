@@ -257,6 +257,13 @@ Decrypts a message using the master AES key (no RSA decryption needed).
 - Returns: Decrypted message
 - Throws: Error if no master key is set or signature verification fails
 
+### `decryptWithMasterAESKeyUnsafe(encryptedData: IRSAEncryptedMessage, sender: string): Promise<IDecryptionResult>`
+Decrypts a message using the master AES key without throwing on signature verification failure.
+- `encryptedData`: The encrypted message object (should not include encryptedAESKey)
+- `sender`: The user ID who sent the message (for signature verification)
+- Returns: Object with `{ message: string, verified: boolean }`
+- Throws: Error if no master key is set or decryption fails (but not signature verification)
+
 ### Enhanced `encryptMessage(message: string, userId: string, useMasterKey?: boolean): Promise<IRSAEncryptedMessage>`
 The standard encrypt method now supports an optional parameter to use the master AES key.
 - `message`: The message to encrypt
@@ -299,6 +306,12 @@ Decrypts a message using the shared key derived with the specified user.
 - `userId`: The user identifier for the shared key
 - Returns: Decrypted message
 
+### `decryptWithSharedKeyUnsafe(encryptedMessage: string, userId: string): Promise<IDecryptionResult>`
+Unsafe variant that returns verification status. Note: SharedKeyData doesn't include signatures, so verified is always true.
+- `encryptedMessage`: Base64 encoded encrypted message
+- `userId`: The user identifier for the shared key
+- Returns: Object with `{ message: string, verified: boolean }` (verified is always true for shared keys)
+
 ### `exportSharedKeyData(userId: string): string`
 Exports shared key data for storage or transport.
 - `userId`: The user identifier for the shared key
@@ -338,6 +351,46 @@ Removes the ECDH public key for the specified user.
 - PBKDF2 key derivation with 100,000 iterations for enhanced security
 - Derived key encryption using AES-GCM with 256-bit keys
 - Base64 encoding for message transport
+
+## Unsafe Decryption Methods
+
+For scenarios where you want to decrypt a message even if signature verification fails, the library provides "unsafe" variants of the decrypt methods. These methods return both the decrypted message and verification status instead of throwing errors on signature verification failure.
+
+### IDecryptionResult Interface
+
+All unsafe methods return an object implementing the `IDecryptionResult` interface:
+
+```typescript
+interface IDecryptionResult {
+  message: string;    // The decrypted message
+  verified: boolean;  // Whether signature verification succeeded
+}
+```
+
+### Available Unsafe Methods
+
+- `decryptMessageUnsafe()` - For regular RSA-AES encrypted messages
+- `decryptWithMasterAESKeyUnsafe()` - For master AES key encrypted messages  
+- `decryptWithSharedKeyUnsafe()` - For shared key encrypted messages (always verified: true)
+
+### Usage Example
+
+```js
+try {
+  const result = await receiver.decryptMessageUnsafe(encryptedData, 'sender');
+  
+  if (result.verified) {
+    console.log('Message verified:', result.message);
+  } else {
+    console.log('Message unverified but readable:', result.message);
+    console.warn('Signature verification failed - treat with caution');
+  }
+} catch (error) {
+  console.error('Decryption failed:', error.message);
+}
+```
+
+These methods are useful when you want to read the message content regardless of signature verification status, while still being informed about the verification result.
 
 # License #
 

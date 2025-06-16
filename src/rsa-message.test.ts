@@ -289,7 +289,9 @@ describe('RSAMessage', () => {
     beforeEach(async () => {
       await sender.init();
       await receiver.init();
-    });    describe('master AES key generation and management', () => {
+    });
+    
+    describe('master AES key generation and management', () => {
       test('generateAndSetMasterAESKey() generates and stores encrypted master key', async () => {
         // Set sender's own public key for self-encryption
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
@@ -298,7 +300,9 @@ describe('RSAMessage', () => {
         expect(encryptedKey).toBeTruthy();
         expect(typeof encryptedKey).toBe('string');
         expect(encryptedKey.length).toBeGreaterThan(0);
-      });      test('setEncryptedMasterAESKey() and getDecryptedMasterAESKey() work correctly', async () => {
+      });
+      
+      test('setEncryptedMasterAESKey() and getDecryptedMasterAESKey() work correctly', async () => {
         // Generate master key for sender
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
         const encryptedKey = await sender.generateAndSetMasterAESKey();
@@ -338,7 +342,9 @@ describe('RSAMessage', () => {
         const receiverMasterKey = await receiver.getDecryptedMasterAESKey();
         expect(receiverMasterKey).toBeTruthy();
         expect(receiverMasterKey.type).toBe('secret');
-      });test('exportMasterAESKeyForUser() encrypts master key for another user', async () => {
+      });
+      
+      test('exportMasterAESKeyForUser() encrypts master key for another user', async () => {
         // Setup: sender has master key, receiver has their own RSA keys
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
         await sender.generateAndSetMasterAESKey();
@@ -350,7 +356,9 @@ describe('RSAMessage', () => {
         expect(encryptedForReceiver).toBeTruthy();
         expect(typeof encryptedForReceiver).toBe('string');
         expect(encryptedForReceiver.length).toBeGreaterThan(0);
-      });      test('setMasterAESKeyFromEncrypted() imports encrypted master key from another user', async () => {
+      });
+      
+      test('setMasterAESKeyFromEncrypted() imports encrypted master key from another user', async () => {
         // Setup: sender generates master key and exports it for receiver
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
         await sender.generateAndSetMasterAESKey();
@@ -367,7 +375,9 @@ describe('RSAMessage', () => {
         expect(receiverMasterKey).toBeTruthy();
         expect(receiverMasterKey.type).toBe('secret');
       });
-    });    describe('master AES key encryption and decryption', () => {
+    });
+    
+    describe('master AES key encryption and decryption', () => {
       beforeEach(async () => {
         // Setup master key for both users
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
@@ -401,7 +411,9 @@ describe('RSAMessage', () => {
         const decrypted = await receiver.decryptWithMasterAESKey(encrypted, 'sender');
         
         expect(decrypted).toBe(message);
-      });      test('regular encrypt/decrypt methods work with master AES key when available', async () => {
+      });
+      
+      test('regular encrypt/decrypt methods work with master AES key when available', async () => {
         const message = 'This tests backwards compatibility with master keys';
         
         // Should use master AES key when available
@@ -410,7 +422,9 @@ describe('RSAMessage', () => {
         
         const decrypted = await receiver.decryptMessage(encrypted, 'sender', true);
         expect(decrypted).toBe(message);
-      });      test('regular encrypt/decrypt methods fall back to RSA when useMasterKey is false', async () => {
+      });
+      
+      test('regular encrypt/decrypt methods fall back to RSA when useMasterKey is false', async () => {
         const message = 'This tests RSA fallback with master keys present';
         
         // Should use RSA even when master key is available
@@ -443,7 +457,8 @@ describe('RSAMessage', () => {
       });
     });
 
-    describe('error handling', () => {      test('getDecryptedMasterAESKey() returns null when no master key set', async () => {
+    describe('error handling', () => {
+      test('getDecryptedMasterAESKey() returns null when no master key set', async () => {
         await expect(sender.getDecryptedMasterAESKey())
           .rejects.toThrow('No master AES key set');
       });
@@ -451,7 +466,9 @@ describe('RSAMessage', () => {
       test('encryptWithMasterAESKey() throws when no master key available', async () => {
         await expect(sender.encryptWithMasterAESKey('test message'))
           .rejects.toThrow('No master AES key set');
-      });test('decryptWithMasterAESKey() throws when no master key available', async () => {
+      });
+      
+      test('decryptWithMasterAESKey() throws when no master key available', async () => {
         const mockEncrypted = {
           encryptedMessage: new ArrayBuffer(0),
           iv: new Uint8Array(12),
@@ -460,12 +477,16 @@ describe('RSAMessage', () => {
         
         await expect(receiver.decryptWithMasterAESKey(mockEncrypted, 'sender'))
           .rejects.toThrow('No master AES key set');
-      });      test('exportMasterAESKeyForUser() throws when no master key available', async () => {
+      });
+      
+      test('exportMasterAESKeyForUser() throws when no master key available', async () => {
         sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
         
         await expect(sender.exportMasterAESKeyForUser('receiver'))
           .rejects.toThrow('No master AES key set');
-      });      test('exportMasterAESKeyForUser() throws when user public key not found', async () => {
+      });
+      
+      test('exportMasterAESKeyForUser() throws when user public key not found', async () => {
         sender.setPublicKey('self', sender.publickey, sender.verifykey);
         await sender.generateAndSetMasterAESKey();
         
@@ -522,7 +543,9 @@ describe('RSAMessage', () => {
         expect(bob.hasSharedKey('alice')).toBe(true);
         expect(salt).toBeTruthy();
         expect(salt instanceof Uint8Array).toBe(true);
-      });      test('deriveSharedKey() works with provided salt', async () => {
+      });
+      
+      test('deriveSharedKey() works with provided salt', async () => {
         const aliceKeyPair = await alice.generateECDHKeyPair();
         const bobKeyPair = await bob.generateECDHKeyPair();
         
@@ -659,6 +682,125 @@ describe('RSAMessage', () => {
         const decryptedResponse = await alice.decryptWithSharedKey(importedResponse, 'bob');
 
         expect(decryptedResponse).toBe(response);
+      });
+    });
+  });
+
+  describe('Unsafe Decryption Methods', () => {
+    beforeEach(async () => {
+      await sender.init();
+      await receiver.init();
+      
+      sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+      receiver.setPublicKey('sender', sender.publickey, sender.verifykey);
+      receiver.setVerifyKey('sender', sender.verifykey);
+    });
+
+    describe('decryptMessageUnsafe()', () => {
+      test('returns verified: true for valid signature', async () => {
+        const message = 'Test message with valid signature';
+        const encrypted = await sender.encryptMessage(message, 'receiver');
+        
+        const result = await receiver.decryptMessageUnsafe(encrypted, 'sender');
+        
+        expect(result.message).toBe(message);
+        expect(result.verified).toBe(true);
+      });
+
+      test('returns verified: false for invalid signature but still decrypts', async () => {
+        const message = 'Test message with invalid signature';
+        const encrypted = await sender.encryptMessage(message, 'receiver');
+        
+        // Corrupt the signature
+        encrypted.signature = new ArrayBuffer(encrypted.signature.byteLength);
+        
+        const result = await receiver.decryptMessageUnsafe(encrypted, 'sender');
+        
+        expect(result.message).toBe(message);
+        expect(result.verified).toBe(false);
+      });
+
+      test('works with master AES key', async () => {
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+        
+        const encryptedForReceiver = await sender.exportMasterAESKeyForUser('receiver');
+        await receiver.setMasterAESKeyFromEncrypted(encryptedForReceiver, 'sender');
+        
+        const message = 'Master key message';
+        const encrypted = await sender.encryptMessage(message, 'receiver', true);
+        
+        const result = await receiver.decryptMessageUnsafe(encrypted, 'sender', true);
+        
+        expect(result.message).toBe(message);
+        expect(result.verified).toBe(true);
+      });
+    });
+
+    describe('decryptWithMasterAESKeyUnsafe()', () => {
+      beforeEach(async () => {
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+        
+        const encryptedForReceiver = await sender.exportMasterAESKeyForUser('receiver');
+        await receiver.setMasterAESKeyFromEncrypted(encryptedForReceiver, 'sender');
+      });
+
+      test('returns verified: true for valid signature', async () => {
+        const message = 'Master AES key message with valid signature';
+        const encrypted = await sender.encryptWithMasterAESKey(message);
+        
+        const result = await receiver.decryptWithMasterAESKeyUnsafe(encrypted, 'sender');
+        
+        expect(result.message).toBe(message);
+        expect(result.verified).toBe(true);
+      });
+
+      test('returns verified: false for invalid signature but still decrypts', async () => {
+        const message = 'Master AES key message with invalid signature';
+        const encrypted = await sender.encryptWithMasterAESKey(message);
+        
+        // Corrupt the signature
+        encrypted.signature = new ArrayBuffer(encrypted.signature.byteLength);
+        
+        const result = await receiver.decryptWithMasterAESKeyUnsafe(encrypted, 'sender');
+        
+        expect(result.message).toBe(message);
+        expect(result.verified).toBe(false);
+      });
+    });
+
+    describe('decryptWithSharedKeyUnsafe()', () => {
+      let alice: RSAMessage;
+      let bob: RSAMessage;
+
+      beforeEach(async () => {
+        alice = new RSAMessage();
+        bob = new RSAMessage();
+        await alice.init();
+        await bob.init();
+
+        // Set up ECDH
+        const aliceKeyPair = await alice.generateECDHKeyPair();
+        const bobKeyPair = await bob.generateECDHKeyPair();
+        
+        await alice.setECDHPublicKey('bob', bobKeyPair.publicKey);
+        await bob.setECDHPublicKey('alice', aliceKeyPair.publicKey);
+        
+        const salt = await alice.deriveSharedKey('bob');
+        await bob.deriveSharedKey('alice', salt);
+      });
+
+      test('always returns verified: true (shared keys have no signatures)', async () => {
+        const message = 'Shared key message';
+        const encrypted = await alice.encryptWithSharedKey(message, 'bob');
+        
+        const result = await bob.decryptWithSharedKeyUnsafe(encrypted, 'alice');
+        
+        expect(result.message).toBe(message);
+        expect(result.verified).toBe(true); // Always true for shared keys
       });
     });
   });

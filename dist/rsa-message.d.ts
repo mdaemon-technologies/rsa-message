@@ -15,6 +15,11 @@ interface SharedKeyData {
     iv: Uint8Array;
 }
 
+export interface IDecryptionResult {
+    message: string;
+    verified: boolean;
+}
+
 export { IRSAEncryptedMessage, ECDHPublicKey, SharedKeyData };
 export default class RSAMessage {
     constructor();
@@ -42,6 +47,10 @@ export default class RSAMessage {
     setMasterAESKeyFromEncrypted(encryptedKey: string, encryptor?: string): Promise<void>;
     encryptWithMasterAESKey(message: string): Promise<IRSAEncryptedMessage>;
     decryptWithMasterAESKey(encryptedData: IRSAEncryptedMessage, sender: string): Promise<string>;
+    decryptWithMasterAESKeyUnsafe(encryptedData: IRSAEncryptedMessage, sender: string): Promise<IDecryptionResult>;
+    
+    // Regular Message Methods with Unsafe Variants
+    decryptMessageUnsafe(encryptedData: IRSAEncryptedMessage, sender: string, useMasterKey?: boolean): Promise<IDecryptionResult>;
     
     // ECDH Key Exchange Methods
     generateECDHKeyPair(): Promise<ECDHPublicKey>;
@@ -49,6 +58,7 @@ export default class RSAMessage {
     deriveSharedKey(userId: string, salt?: Uint8Array): Promise<Uint8Array>;
     encryptWithSharedKey(message: string, userId: string): Promise<SharedKeyData>;
     decryptWithSharedKey(encryptedData: SharedKeyData, userId: string): Promise<string>;
+    decryptWithSharedKeyUnsafe(encryptedData: SharedKeyData, userId: string): Promise<IDecryptionResult>;
     exportSharedKeyData(data: SharedKeyData): string;
     importSharedKeyData(encoded: string): SharedKeyData;
     hasSharedKey(userId: string): boolean;
