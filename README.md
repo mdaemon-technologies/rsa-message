@@ -238,7 +238,7 @@ Encrypts the current master AES key with another user's RSA public key for shari
 - Throws: Error if no master key is set or user's public key not found
 
 ### `setMasterAESKeyFromEncrypted(encryptedKey: string, encryptor?: string): Promise<void>`
-Sets the master AES key from an encrypted key received from another user and immediately validates it by attempting decryption.
+Sets the master AES key from an encrypted key received from another user and immediately validates it by attempting decryption. Re-encrypts the key with the self key, so that if the from user's verifyKey changes the key can still be decrypted
 - `encryptedKey`: Base64 encoded encrypted master AES key
 - `encryptor`: Optional user ID who encrypted the key (defaults to "self")
 

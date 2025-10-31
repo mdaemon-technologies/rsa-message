@@ -46,9 +46,6 @@ class RSAMessage {
   private encryptedMasterAESKey: string | null = null;  // Track who encrypted the master AES key for proper verification
   private masterAESKeyEncryptor: string | null = null;
   
-  // Optionally cache the decrypted key in memory for a session (not persisted)
-  private masterAESKeyCache: CryptoKey | null = null;
-
   /**
    * Generates a new AES master key, encrypts it with the current user's publicKey, and sets it as the master key.
    * @returns {Promise<string>} The encrypted master AES key (base64 string)
@@ -67,7 +64,6 @@ class RSAMessage {
     // Store the encrypted master key
     this.encryptedMasterAESKey = exportedEncrypted;
     this.masterAESKeyEncryptor = "self"; // We encrypted it ourselves
-    this.masterAESKeyCache = null; // Clear cache
     return exportedEncrypted;
   }
 
@@ -75,10 +71,10 @@ class RSAMessage {
    * Sets the encrypted master AES key (base64 string, encrypted with this user's publicKey)
    * @param {string} encryptedKey - The encrypted master AES key (base64 string)
    * @param {string} encryptor - The user ID who encrypted the key (defaults to "self")
-   */  public setEncryptedMasterAESKey(encryptedKey: string, encryptor: string = "self") {
+   */  
+  public setEncryptedMasterAESKey(encryptedKey: string, encryptor: string = "self") {
     this.encryptedMasterAESKey = encryptedKey;
     this.masterAESKeyEncryptor = encryptor;
-    this.masterAESKeyCache = null; // Clear cache
   }
 
   /**
@@ -205,9 +201,26 @@ class RSAMessage {
   public async setMasterAESKeyFromEncrypted(encryptedKey: string, encryptor: string = "self"): Promise<void> {
     this.encryptedMasterAESKey = encryptedKey;
     this.masterAESKeyEncryptor = encryptor;
-    this.masterAESKeyCache = null;
     // Optionally, test decryption now to verify
-    await this.getDecryptedMasterAESKey();
+    const aesKey = await this.getDecryptedMasterAESKey();
+    if (encryptor !== "self") {
+      // Export as JWK
+      const exported = await getCrypto().subtle.exportKey("jwk", aesKey);
+      const exportedStr = JSON.stringify(exported);
+      
+      // Ensure our own public key is set up for re-encryption
+      if (!this.publicKeys.has("self")) {
+        this.setPublicKey("self", this.publicKey, this.verifyKey);
+      }
+      
+      // Re-encrypt with our own publicKey, so that if the encryptor's verify key changes we still have a valid copy
+      const encrypted = await this.encryptMessage(exportedStr, "self");
+      const exportedEncrypted = this.exportEncryptedMessage(encrypted);
+      
+      // Store the encrypted master key
+      this.encryptedMasterAESKey = exportedEncrypted;
+      this.masterAESKeyEncryptor = "self"; // We encrypted it ourselves
+    }
   }
 
   /**

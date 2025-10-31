@@ -375,6 +375,45 @@ describe('RSAMessage', () => {
         expect(receiverMasterKey).toBeTruthy();
         expect(receiverMasterKey.type).toBe('secret');
       });
+
+      test('setMasterAESKeyFromEncrypted() re-encrypts key with own public key and allows message encryption', async () => {
+        // Setup: sender generates master key and exports it for receiver
+        sender.setPublicKey('self', sender.publickey, sender.verifykey);
+        await sender.generateAndSetMasterAESKey();
+        sender.setPublicKey('receiver', receiver.publickey, receiver.verifykey);
+        const encryptedForReceiver = await sender.exportMasterAESKeyForUser('receiver');
+
+        // Create a third user to test re-encryption
+        const thirdUser = new RSAMessage();
+        await thirdUser.init();
+        sender.setPublicKey('third', thirdUser.publickey, thirdUser.verifykey);
+
+        // Receiver imports the encrypted master key
+        receiver.setPublicKey('sender', sender.publickey, sender.verifykey);
+        receiver.setVerifyKey('sender', sender.verifykey);
+        await receiver.setMasterAESKeyFromEncrypted(encryptedForReceiver, 'sender');
+
+        // Verify receiver can export the master key for a third user (proves re-encryption worked)
+        receiver.setPublicKey('third', thirdUser.publickey, thirdUser.verifykey);
+        const encryptedForThird = await receiver.exportMasterAESKeyForUser('third');
+        expect(encryptedForThird).toBeTruthy();
+        expect(typeof encryptedForThird).toBe('string');
+        expect(encryptedForThird.length).toBeGreaterThan(0);
+
+        // Verify receiver can still encrypt messages with the master key
+        const testMessage = 'Test message with re-encrypted master key';
+        const encrypted = await receiver.encryptWithMasterAESKey(testMessage);
+
+        // Verify the encrypted message structure
+        expect(encrypted).toHaveProperty('iv');
+        expect(encrypted).toHaveProperty('encryptedMessage');
+        expect(encrypted).toHaveProperty('signature');
+        expect(encrypted.encryptedAESKey).toBeUndefined(); // Master key encryption doesn't include encryptedAESKey
+
+        // Verify the message can be decrypted
+        const decrypted = await receiver.decryptWithMasterAESKey(encrypted, 'self');
+        expect(decrypted).toBe(testMessage);
+      });
     });
     
     describe('master AES key encryption and decryption', () => {
