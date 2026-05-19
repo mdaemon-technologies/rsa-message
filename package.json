@@ -1,7 +1,7 @@
 {
   "name": "@mdaemon/rsa-message",
   "type": "module",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "RSA message encryption, signing, decryption, and verification using webcrypto or node crypto",
   "main": "dist/rsa-message.umd.js",
   "module": "dist/rsa-message.mjs",
@@ -57,9 +57,16 @@
     "tslib": "^2.8.1",
     "typescript": "^5.8.3"
   },
-  "filest": [
+  "files": [
     "dist"
   ],
+  "exports": {
+    ".": {
+      "import": "./dist/rsa-message.mjs",
+      "require": "./dist/rsa-message.cjs",
+      "browser": "./dist/rsa-message.umd.js"
+    }
+  },
   "dependencies": {
     "base64util": "^2.2.0"
   }
