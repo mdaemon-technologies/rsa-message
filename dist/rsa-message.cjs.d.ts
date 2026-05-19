@@ -1,1 +1,2 @@
-declare module '@mdaemon/rsa-message/dist/rsa-message.cjs'
+export { IRSAEncryptedMessage, ECDHPublicKey, SharedKeyData, IDecryptionResult } from './rsa-message';
+export { default } from './rsa-message';

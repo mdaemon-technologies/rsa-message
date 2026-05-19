@@ -235,7 +235,7 @@ class RSAMessage {
     const data = encoder.encode(message);
     const iv = getCrypto().getRandomValues(new Uint8Array(12));
     const encryptedMessage = await getCrypto().subtle.encrypt(
-      { name: "AES-GCM", iv },
+      { name: "AES-GCM", iv: iv as BufferSource },
       aesKey,
       data
     );
@@ -260,7 +260,7 @@ class RSAMessage {
     let decryptedMessage: ArrayBuffer;
     try {
       decryptedMessage = await getCrypto().subtle.decrypt(
-        { name: "AES-GCM", iv },
+        { name: "AES-GCM", iv: iv as BufferSource },
         aesKey,
         new Uint8Array(encryptedMessage)
       );
@@ -299,7 +299,7 @@ class RSAMessage {
     let decryptedMessage: ArrayBuffer;
     try {
       decryptedMessage = await getCrypto().subtle.decrypt(
-        { name: "AES-GCM", iv },
+        { name: "AES-GCM", iv: iv as BufferSource },
         aesKey,
         new Uint8Array(encryptedMessage)
       );
@@ -389,20 +389,20 @@ class RSAMessage {
   }
 
   private genKeyPair = async (type: "decrypt" | "sign" = "decrypt"): Promise<RSAKeyPair> => {
-    const usage = type === "decrypt" ? ["encrypt", "decrypt"] : ["sign", "verify"];
-    const keyPair: RSAKeyPair = await getCrypto().subtle.generateKey(
+    const usage: KeyUsage[] = type === "decrypt" ? ["encrypt", "decrypt"] : ["sign", "verify"];
+    const keyPair = await getCrypto().subtle.generateKey(
       {
        name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
        modulusLength: 2048,
        publicExponent: new Uint8Array([1, 0, 1]),
        hash: "SHA-256",
-      },
+      } as RsaHashedKeyGenParams,
       true,
       usage
     );
     
-    const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.publicKey);
-    const privateKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.privateKey);
+    const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", (keyPair as CryptoKeyPair).publicKey);
+    const privateKeyRaw = await getCrypto().subtle.exportKey("jwk", (keyPair as CryptoKeyPair).privateKey);
     return { publicKey: encode(JSON.stringify(publicKeyRaw)), privateKey: encode(JSON.stringify(privateKeyRaw)) };
   };
 
@@ -857,7 +857,7 @@ class RSAMessage {
     return encode(JSON.stringify({
       iv: String.fromCharCode(...message.iv),
       encryptedMessage: bufferToBase64(message.encryptedMessage),
-      encryptedAESKey: bufferToBase64(message.encryptedAESKey),
+      encryptedAESKey: message.encryptedAESKey ? bufferToBase64(message.encryptedAESKey) : undefined,
       signature: bufferToBase64(message.signature)
     }));
   }
@@ -872,7 +872,7 @@ class RSAMessage {
     return {
       iv: new Uint8Array([...decoded.iv].map(c => c.charCodeAt(0))),
       encryptedMessage: base64ToBuffer(decoded.encryptedMessage),
-      encryptedAESKey: base64ToBuffer(decoded.encryptedAESKey),
+      encryptedAESKey: decoded.encryptedAESKey ? base64ToBuffer(decoded.encryptedAESKey) : undefined,
       signature: base64ToBuffer(decoded.signature)
     };
   }

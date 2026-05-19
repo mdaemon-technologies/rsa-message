@@ -1,24 +1,15 @@
 import { encode, decode, byteEncode } from "base64util";
 
 export const getCrypto = () => {
-  if (typeof window !== 'undefined') {
-    return window.crypto;
-  }
-  return require('crypto').webcrypto;
+  return globalThis.crypto;
 };
 
 export const getTextEncoder = () => {
-  if (typeof window !== 'undefined') {
-    return new window.TextEncoder();
-  }
-  return new (require('util').TextEncoder)();
+  return new TextEncoder();
 };
 
 export const getTextDecoder = () => {
-  if (typeof window !== 'undefined') {
-    return new window.TextDecoder();
-  }
-  return new (require('util').TextDecoder)();
+  return new TextDecoder();
 };
 
 export const bufferToBase64 = (buffer: ArrayBuffer): string => {

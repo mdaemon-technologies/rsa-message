@@ -122,7 +122,7 @@ describe('RSAMessage', () => {
       
       expect(encrypted.iv).toBeInstanceOf(Uint8Array);
       expect(new Uint8Array(encrypted.encryptedMessage)).toBeInstanceOf(Uint8Array);
-      expect(new Uint8Array(encrypted.encryptedAESKey)).toBeInstanceOf(Uint8Array);
+      expect(new Uint8Array(encrypted.encryptedAESKey!)).toBeInstanceOf(Uint8Array);
       expect(new Uint8Array(encrypted.signature)).toBeInstanceOf(Uint8Array);
     });
 
