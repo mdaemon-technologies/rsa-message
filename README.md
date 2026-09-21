@@ -1,7 +1,14 @@
-# @mdaemon/rsa-message - RSA message encryption, signing, decryption, verification, and ECDH key exchange using webcrypto or node crypto
-[![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmdaemon-technologies%2Frsa-message%2Fmain%2Fpackage.json&query=%24.version&prefix=v&label=npm&color=blue)](https://www.npmjs.com/package/@mdaemon/rsa-message) [![Static Badge](https://img.shields.io/badge/node-v18%2B-blue?style=flat&label=node&color=blue)](https://nodejs.org) [![install size](https://packagephobia.com/badge?p=@mdaemon/rsa-message)](https://packagephobia.com/result?p=@mdaemon/rsa-message) [![Dynamic JSON Badge](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmdaemon-technologies%2Frsa-message%2Fmain%2Fpackage.json&query=%24.license&prefix=v&label=license&color=green)](https://github.com/mdaemon-technologies/rsa-message/blob/main/LICENSE) [![Node.js CI](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml/badge.svg)](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml)
+# @mdaemon/rsa-message
 
-[ [@mdaemon/rsa-message on npm](https://www.npmjs.com/package/@mdaemon/rsa-message "npm") ]
+[![npm](https://img.shields.io/npm/v/@mdaemon/rsa-message?color=blue)](https://www.npmjs.com/package/@mdaemon/rsa-message)
+[![license](https://img.shields.io/npm/l/@mdaemon/rsa-message?color=green)](LICENSE)
+[![node](https://img.shields.io/node/v/@mdaemon/rsa-message)](https://nodejs.org)
+[![install size](https://packagephobia.com/badge?p=@mdaemon/rsa-message)](https://packagephobia.com/result?p=@mdaemon/rsa-message)
+[![CI](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml/badge.svg)](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml)
+
+RSA message encryption, signing, decryption, and verification using webcrypto or node crypto
+
+It also supports ECDH key exchange for derived (shared) key encryption.
 
 ## Note
 This library uses the browser's Web Crypto API for key generation and encryption. This means that it is not compatible with older browsers that do not support the Web Crypto API. 
@@ -12,29 +19,31 @@ This library is ideal for temporary use cases where you don't need to persist ke
 
 ## Install
 
-```cmd
-$ npm install @mdaemon/rsa-message --save
+```bash
+npm install @mdaemon/rsa-message
 ```
 
 ## Usage
 
-### Node CommonJS
-```js
-const RSAMessage = require("@mdaemon/rsa-message");
-```
+### ES modules
 
-### Node ES Modules
 ```js
 import RSAMessage from "@mdaemon/rsa-message";
 ```
 
-### Web
-```html
-<script type="text/javascript" src="/path_to_modules/@mdaemon/rsa-message/dist/rsa-message.umd.js">
+### CommonJS
+
+```js
+const RSAMessage = require("@mdaemon/rsa-message");
 ```
 
+### Browser (UMD)
 
-## Usage
+```html
+<script type="text/javascript" src="/path_to_modules/@mdaemon/rsa-message/dist/rsa-message.umd.js"></script>
+```
+
+## Examples
 
 ```js
 // Initialize RSA for a user
@@ -360,7 +369,7 @@ For scenarios where you want to decrypt a message even if signature verification
 
 All unsafe methods return an object implementing the `IDecryptionResult` interface:
 
-```typescript
+```ts
 interface IDecryptionResult {
   message: string;    // The decrypted message
   verified: boolean;  // Whether signature verification succeeded
@@ -392,11 +401,14 @@ try {
 
 These methods are useful when you want to read the message content regardless of signature verification status, while still being informed about the verification result.
 
-# License #
+## Changelog
 
-Published under the [LGPL-2.1 license](https://github.com/mdaemon-technologies/rsa-message/blob/main/LICENSE "LGPL-2.1 License").
+See [CHANGELOG.md](CHANGELOG.md).
 
-Published by<br/> 
-<b>MDaemon Technologies, Ltd.<br/>
-Simple Secure Email</b><br/>
+## License
+
+Published under the [LGPL-2.1](LICENSE) license.
+
+Published by **MDaemon Technologies, Ltd.**  
+Simple Secure Email  
 [https://www.mdaemon.com](https://www.mdaemon.com)

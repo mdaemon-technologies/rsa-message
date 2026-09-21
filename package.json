@@ -1,7 +1,7 @@
 {
   "name": "@mdaemon/rsa-message",
   "type": "module",
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "RSA message encryption, signing, decryption, and verification using webcrypto or node crypto",
   "main": "dist/rsa-message.cjs",
   "module": "dist/rsa-message.mjs",
@@ -38,6 +38,9 @@
     "url": "https://www.mdaemon.com"
   },
   "license": "LGPL-2.1",
+  "engines": {
+    "node": ">=18"
+  },
   "bugs": {
     "url": "https://github.com/mdaemon-technologies/rsa-message/issues"
   },
