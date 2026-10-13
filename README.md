@@ -15,7 +15,7 @@ This library uses the browser's Web Crypto API for key generation and encryption
 
 Keys are not persistent between browser sessions. This means that if you close your browser and reopen it, you will need to re-initialize the RSAMessage instance.
 
-This library is ideal for temporary use cases where you don't need to persist keys between sessions. If you need to persist keys between sessions, you should use a library like [localForage](https://localforage.github.io/localForage/) to store them in the browser's local storage.
+To keep keys between sessions, use `initKeySet()`: its private keys are non-extractable `CryptoKey`s that you can store in IndexedDB and reload later, but that no script can export. Avoid saving the private key strings from `init()` in `localStorage` or similar storage, where any script on the page can read them. See [Keeping keys between visits](#keeping-keys-between-visits-non-extractable).
 
 ## Install
 
@@ -48,10 +48,10 @@ const RSAMessage = require("@mdaemon/rsa-message");
 ```js
 // Initialize RSA for a user
 const sender = new RSAMessage();
-const { publicKey, verifyKey } = await sender.init();
+const { publicKey, verifyKey } = await sender.initKeySet();
 
 const recipient = new RSAMessage();
-const { publicKey: theirPublicKey, verifyKey: theirVerifyKey } = await recipient.init();
+const { publicKey: theirPublicKey, verifyKey: theirVerifyKey } = await recipient.initKeySet();
 // Store public key from another user to use for encryption and verification
 sender.setPublicKey('otherUserId', theirPublicKey, theirVerifyKey);
 recipient.setPublicKey('senderId', publicKey, verifyKey);
@@ -78,8 +78,8 @@ For scenarios requiring perfect forward secrecy and efficient symmetric encrypti
 const alice = new RSAMessage();
 const bob = new RSAMessage();
 
-await alice.init();
-await bob.init();
+await alice.initKeySet();
+await bob.initKeySet();
 
 // Generate ECDH key pairs for both users
 const { publicKey: aliceECDHPublicKey } = await alice.generateECDHKeyPair();
@@ -112,9 +112,9 @@ const admin = new RSAMessage();
 const member1 = new RSAMessage();
 const member2 = new RSAMessage();
 
-await admin.init();
-await member1.init();
-await member2.init();
+await admin.initKeySet();
+await member1.initKeySet();
+await member2.initKeySet();
 
 // Set up public keys for encryption/verification
 admin.setPublicKey('self', admin.publickey, admin.verifykey);
@@ -151,12 +151,55 @@ const encrypted2 = await member1.encryptMessage(message, 'member2', true);
 const decrypted3 = await member2.decryptMessage(encrypted2, 'member1', true);
 ```
 
+### Keeping keys between visits (non-extractable)
+
+`initKeySet()` returns a key set whose private keys are `CryptoKey`s that cannot be exported. Store it in IndexedDB (which keeps `CryptoKey`s through structured clone) and pass it back to `initKeySet()` on the next visit. Keys saved earlier as strings can be converted once with `importKeySet()`; the public keys stay the same, so earlier messages can still be decrypted.
+
+```js
+const rsa = new RSAMessage();
+let keySet = await idbGet("rsa-keys");          // your own IndexedDB helper
+
+if (keySet) {
+  await rsa.initKeySet(keySet);                  // reuse the stored key set
+} else if (localStorage.getItem("rsa-private")) {
+  // one-time migration from keys saved as strings; throws (and keeps the strings) if they don't match
+  keySet = await rsa.importKeySet(
+    localStorage.getItem("rsa-public"), localStorage.getItem("rsa-private"),
+    localStorage.getItem("rsa-verify"), localStorage.getItem("rsa-sign"));
+  await idbPut("rsa-keys", keySet);
+  ["rsa-public", "rsa-private", "rsa-verify", "rsa-sign"].forEach(k => localStorage.removeItem(k));
+} else {
+  keySet = await rsa.initKeySet();               // first visit: generate
+  await idbPut("rsa-keys", keySet);
+}
+
+// register rsa.publickey / rsa.verifykey with your server as before
+```
+
+Deleting the strings cannot be undone: the converted private keys cannot be exported back to strings. If other code still reads the same strings, migrate it before any of it deletes them.
+
+## Deprecated APIs
+
+These still work in 2.x, but they expose private keys as strings that any script on the page can copy, so they will be removed in 3.0.0.
+
+| Deprecated | Replacement |
+|---|---|
+| `init()` with no arguments | `initKeySet()` |
+| `init(publicKey, privateKey, verifyKey, signKey)` | `importKeySet(...)` once with the saved strings, then store the returned key set and pass it to `initKeySet(keySet)` on later visits |
+| `privatekey`, `signkey` getters | Store the `RSAKeySet` returned by `initKeySet()` or `importKeySet()` |
+
+`importKeySet()` is not deprecated; it stays in 3.0.0 so keys saved as strings can still be converted.
+
+Each deprecated API logs a warning the first time it is used on a page or in a process: in Node through `process.emitWarning()` as a `DeprecationWarning` (codes `RSA_MESSAGE_DEP_INIT`, `RSA_MESSAGE_DEP_PRIVATEKEY`, `RSA_MESSAGE_DEP_SIGNKEY`; silence with `--no-deprecation`), and in browsers through `console.warn()`.
+
 ## API Reference
 
 ### `new RSAMessage()`
 Creates a new instance of the RSAMessage class.
 
 ### `init(publicKey?: string, privateKey?: string, verifyKey?: string, signKey?: string): Promise<{publicKey: string, verifyKey: string}>`
+**Deprecated since 2.3.0; will be removed in 3.0.0.** Use `initKeySet()`, or `importKeySet()` to convert keys saved as strings. See [Deprecated APIs](#deprecated-apis).
+
 Initializes the keys for the user. Can either generate new keys or use existing keys.
 - `publicKey`: Optional base64 encoded public key
 - `privateKey`: Optional base64 encoded private key
@@ -164,17 +207,44 @@ Initializes the keys for the user. Can either generate new keys or use existing 
 - `signKey`: Optional base64 encoded signing key
 - Returns: Object with `publicKey` and `verifyKey` strings
 
+### `initKeySet(keySet?: RSAKeySet): Promise<RSAKeySet>`
+Initializes keys whose private halves cannot be exported. With no argument, new key pairs are generated. Pass a key set returned earlier (for example read back from IndexedDB) to reuse it.
+- `keySet`: Optional key set returned by an earlier `initKeySet()` or `importKeySet()`
+- Returns: The `RSAKeySet` in use; store it to reuse on the next visit
+- Throws `KeyImportError` if the key set is incomplete, a private key is extractable or has the wrong algorithm, or the private keys do not belong to the public keys
+- Afterwards `privatekey` and `signkey` return `""`; calling the deprecated `init()` switches back to string keys
+
+### `importKeySet(publicKey: string, privateKey: string, verifyKey: string, signKey: string): Promise<RSAKeySet>`
+Converts keys saved as strings (from `init()` and the `privatekey`/`signkey` getters) into a non-extractable key set **with the same public keys**, and initializes with it. Anything encrypted for the old keys can still be decrypted. Use it once to migrate, then store the returned key set in place of the strings.
+- Returns: The converted `RSAKeySet`
+- Throws `KeyImportError` if a key is missing, a private key string cannot be imported, or the private keys do not belong to the public keys
+
+### `RSAKeySet`
+```ts
+interface RSAKeySet {
+  publicKey: string;     // public encryption key, same format init() returns
+  verifyKey: string;     // public verification key
+  privateKey: CryptoKey; // non-extractable RSA-OAEP decryption key
+  signKey: CryptoKey;    // non-extractable RSA-PSS signing key
+}
+```
+TypeScript: `import RSAMessage, { RSAKeySet } from "@mdaemon/rsa-message";`
+
 ### `publickey: string`
 Getter that returns the base64 encoded public key.
 
 ### `privatekey: string`
-Getter that returns the base64 encoded private key.
+**Deprecated since 2.3.0; will be removed in 3.0.0.** Store the `RSAKeySet` from `initKeySet()` instead.
+
+Getter that returns the base64 encoded private key, or `""` after `initKeySet()` or `importKeySet()`.
 
 ### `verifykey: string`
 Getter that returns the base64 encoded verification key used for signature verification.
 
 ### `signkey: string`
-Getter that returns the base64 encoded signing key used for creating message signatures.
+**Deprecated since 2.3.0; will be removed in 3.0.0.** Store the `RSAKeySet` from `initKeySet()` instead.
+
+Getter that returns the base64 encoded signing key used for creating message signatures, or `""` after `initKeySet()` or `importKeySet()`.
 
 ### `signMessage(message: string): Promise<ArrayBuffer>`
 Signs a message using the private signing key.

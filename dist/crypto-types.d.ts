@@ -41,3 +41,9 @@ export interface ECDHConfig {
     name: 'ECDH';
     public: CryptoKey;
 }
+export interface RSAKeySet {
+    publicKey: string;
+    verifyKey: string;
+    privateKey: CryptoKey;
+    signKey: CryptoKey;
+}

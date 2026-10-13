@@ -3,8 +3,9 @@ import {
   getCrypto, 
   getTextEncoder, 
   getTextDecoder, 
-  bufferToBase64, 
-  base64ToBuffer
+  bufferToBase64,
+  base64ToBuffer,
+  warnDeprecated
 } from "./util";
 import {
   CryptoKeyOptions,
@@ -16,9 +17,12 @@ import {
   ECDHPublicKey,
   SharedKeyData,
   DerivedKeyConfig,
-  ECDHConfig
+  ECDHConfig,
+  RSAKeySet
 } from "./crypto-types";
 import { CryptoOperationError, KeyImportError } from "./error-types";
+
+export type { RSAKeySet } from "./crypto-types";
 
 export interface IDecryptionResult {
   message: string;
@@ -32,11 +36,18 @@ export interface IRSAEncryptedMessage {
   encryptedAESKey?: ArrayBuffer; // Optional for master AES encryption
 }
 
+const isNonExtractablePrivate = (key: CryptoKey, algorithm: "RSA-OAEP" | "RSA-PSS"): boolean =>
+  !!key && key.type === "private" && key.extractable === false && key.algorithm?.name === algorithm;
+
 class RSAMessage {
+  // Private key strings from the deprecated init(); remove privateKey and signKey in 3.0.0
   private privateKey: string;
   private publicKey: string;
   private verifyKey: string;
   private signKey: string;
+  // Set by initKeySet() / importKeySet(); used instead of the private key strings above
+  private privateCryptoKey: CryptoKey | null = null;
+  private signCryptoKey: CryptoKey | null = null;
   private publicKeys: Map<string, string> = new Map();
   private verifyKeys: Map<string, string> = new Map();
   private ecdhPrivateKey: CryptoKey | null = null;
@@ -96,7 +107,7 @@ class RSAMessage {
     // Decrypt the AES key with our own private key
     let privateKey: CryptoKey;
     try {
-      privateKey = await this.importPrivateKey(this.privateKey, "decrypt");
+      privateKey = await this.getPrivateKey("decrypt");
     } catch (error) {
       throw new Error(`Failed to import private key: ${error}`);
     }
@@ -340,11 +351,23 @@ class RSAMessage {
     return this.verifyKey;
   }
 
+  /**
+   * @deprecated Since 2.3.0; will be removed in 3.0.0. Private keys from initKeySet() cannot be exported,
+   * so store the RSAKeySet it returns instead of this string.
+   */
   get privatekey() {
+    warnDeprecated("RSA_MESSAGE_DEP_PRIVATEKEY",
+      "RSAMessage.privatekey is deprecated and will be removed in 3.0.0. Use initKeySet() and store the key set it returns instead.");
     return this.privateKey;
   }
 
+  /**
+   * @deprecated Since 2.3.0; will be removed in 3.0.0. Private keys from initKeySet() cannot be exported,
+   * so store the RSAKeySet it returns instead of this string.
+   */
   get signkey() {
+    warnDeprecated("RSA_MESSAGE_DEP_SIGNKEY",
+      "RSAMessage.signkey is deprecated and will be removed in 3.0.0. Use initKeySet() and store the key set it returns instead.");
     return this.signKey;
   }
 
@@ -369,8 +392,15 @@ class RSAMessage {
    * @param {string} [verifyKey] - The public key for signature verification
    * @param {string} [signKey] - The private key for signing
    * @returns {Promise<{publicKey: string, verifyKey: string}>} The public keys for encryption and verification
+   * @deprecated Since 2.3.0; will be removed in 3.0.0. Use initKeySet() to generate or reuse keys whose private
+   * halves cannot be exported, and importKeySet() once to convert keys saved as strings.
    */
   public async init(publicKey?: string, privateKey?: string, verifyKey?: string, signKey?: string) : Promise<KeyPairOutput> {
+    warnDeprecated("RSA_MESSAGE_DEP_INIT",
+      "RSAMessage.init() is deprecated and will be removed in 3.0.0. Use initKeySet() to generate or reuse keys, or importKeySet() to convert keys saved as strings.");
+    this.privateCryptoKey = null;
+    this.signCryptoKey = null;
+
     if (publicKey && privateKey && verifyKey && signKey) {
       this.publicKey = publicKey;
       this.privateKey = privateKey;
@@ -387,6 +417,124 @@ class RSAMessage {
     this.signKey = signatureKeys.privateKey;
     return { publicKey: encryptionKeys.publicKey, verifyKey: signatureKeys.publicKey };
   }
+
+  /**
+   * Initializes RSA keys whose private halves cannot be exported. Pass a key set returned by an
+   * earlier initKeySet() or importKeySet() (for example read back from IndexedDB) to reuse it;
+   * otherwise new key pairs are generated. The private CryptoKeys survive structured clone, so
+   * they can be stored, but exportKey() rejects them and the privatekey and signkey getters
+   * return "".
+   *
+   * @param {RSAKeySet} [keySet] - A key set to reuse
+   * @returns {Promise<RSAKeySet>} The key set in use, to store for the next session
+   * @throws {KeyImportError} If the key set is incomplete, its private keys are extractable or
+   *   have the wrong algorithm, or they do not belong to its public keys
+   */
+  public async initKeySet(keySet?: RSAKeySet): Promise<RSAKeySet> {
+    if (!keySet) {
+      const encryption = await this.genKeySetPair("decrypt");
+      const signature = await this.genKeySetPair("sign");
+      keySet = {
+        publicKey: encryption.publicKey,
+        privateKey: encryption.privateKey,
+        verifyKey: signature.publicKey,
+        signKey: signature.privateKey,
+      };
+    }
+    else {
+      if (!keySet.publicKey || !keySet.verifyKey ||
+          !isNonExtractablePrivate(keySet.privateKey, "RSA-OAEP") || !isNonExtractablePrivate(keySet.signKey, "RSA-PSS")) {
+        throw new KeyImportError("A key set needs both public keys and two non-extractable private keys", "private");
+      }
+      await this.checkKeySet(keySet);
+    }
+
+    this.useKeySet(keySet);
+    return keySet;
+  }
+
+  /**
+   * Converts keys saved from init()'s exported strings into a key set whose private halves
+   * cannot be exported, and initializes with it. The public keys are unchanged, so anything
+   * encrypted for the old keys can still be decrypted.
+   *
+   * @param {string} publicKey - The saved public key for encryption
+   * @param {string} privateKey - The saved private key for decryption
+   * @param {string} verifyKey - The saved public key for signature verification
+   * @param {string} signKey - The saved private key for signing
+   * @returns {Promise<RSAKeySet>} The converted key set, to store in place of the strings
+   * @throws {KeyImportError} If a key is missing, a private key string cannot be imported, or the
+   *   private keys do not belong to the public keys
+   */
+  public async importKeySet(publicKey: string, privateKey: string, verifyKey: string, signKey: string): Promise<RSAKeySet> {
+    if (!publicKey || !verifyKey) {
+      throw new KeyImportError("A key set needs both public keys", "public");
+    }
+    const keySet: RSAKeySet = {
+      publicKey,
+      verifyKey,
+      privateKey: await this.importPrivateKey(privateKey, "decrypt"),
+      signKey: await this.importPrivateKey(signKey, "sign"),
+    };
+    await this.checkKeySet(keySet);
+    this.useKeySet(keySet);
+    return keySet;
+  }
+
+  // Proves each private key belongs to its public key, so a mismatched set fails here, not on first use
+  private checkKeySet = async (keySet: RSAKeySet): Promise<void> => {
+    const probe = getCrypto().getRandomValues(new Uint8Array(32));
+    const rsaPss = { name: "RSA-PSS", saltLength: 32 } as RSAConfig;
+    let matches = false;
+    let cause: Error | undefined;
+    try {
+      const encrypted = await getCrypto().subtle.encrypt({ name: "RSA-OAEP" } as RSAConfig,
+        await this.importPublicKey(keySet.publicKey, "encrypt"), probe);
+      const decrypted = new Uint8Array(await getCrypto().subtle.decrypt({ name: "RSA-OAEP" } as RSAConfig, keySet.privateKey, encrypted));
+      const signature = await getCrypto().subtle.sign(rsaPss, keySet.signKey, probe);
+      matches = decrypted.length === probe.length && decrypted.every((b, i) => b === probe[i]) &&
+        await getCrypto().subtle.verify(rsaPss, await this.importPublicKey(keySet.verifyKey, "verify"), signature, probe);
+    } catch (error) {
+      cause = error instanceof Error ? error : undefined;
+    }
+    if (!matches) {
+      throw new KeyImportError("The private keys do not match the public keys", "private", cause);
+    }
+  };
+
+  private useKeySet(keySet: RSAKeySet) {
+    this.publicKey = keySet.publicKey;
+    this.verifyKey = keySet.verifyKey;
+    this.privateCryptoKey = keySet.privateKey;
+    this.signCryptoKey = keySet.signKey;
+    this.privateKey = "";
+    this.signKey = "";
+  }
+
+  private genKeySetPair = async (type: "decrypt" | "sign"): Promise<{ publicKey: string, privateKey: CryptoKey }> => {
+    const keyPair = await getCrypto().subtle.generateKey(
+      {
+        name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      } as RsaHashedKeyGenParams,
+      false, // the private key cannot be exported; WebCrypto always makes the RSA public key exportable
+      type === "decrypt" ? ["encrypt", "decrypt"] : ["sign", "verify"]
+    ) as CryptoKeyPair;
+
+    const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.publicKey);
+    return { publicKey: encode(JSON.stringify(publicKeyRaw)), privateKey: keyPair.privateKey };
+  };
+
+  private getPrivateKey = async (type: "decrypt" | "sign"): Promise<CryptoKey> => {
+    const cryptoKey = type === "decrypt" ? this.privateCryptoKey : this.signCryptoKey;
+    if (cryptoKey) {
+      return cryptoKey;
+    }
+    // String keys only come from the deprecated init(); remove this fallback in 3.0.0
+    return await this.importPrivateKey(type === "decrypt" ? this.privateKey : this.signKey, type);
+  };
 
   private genKeyPair = async (type: "decrypt" | "sign" = "decrypt"): Promise<RSAKeyPair> => {
     const usage: KeyUsage[] = type === "decrypt" ? ["encrypt", "decrypt"] : ["sign", "verify"];
@@ -555,7 +703,7 @@ class RSAMessage {
       // Standard RSA-AES decryption
       let privateKey: CryptoKey;
       try {
-        privateKey = await this.importPrivateKey(this.privateKey, "decrypt");
+        privateKey = await this.getPrivateKey("decrypt");
       }
       catch (error) {
         throw new Error(`Failed to import private key: ${error}`);
@@ -654,7 +802,7 @@ class RSAMessage {
       // Standard RSA-AES decryption
       let privateKey: CryptoKey;
       try {
-        privateKey = await this.importPrivateKey(this.privateKey, "decrypt");
+        privateKey = await this.getPrivateKey("decrypt");
       }
       catch (error) {
         throw new Error(`Failed to import private key: ${error}`);
@@ -743,7 +891,7 @@ class RSAMessage {
     const data = encoder.encode(message);
     
     try {
-      const privateKey = await this.importPrivateKey(this.signKey, "sign");
+      const privateKey = await this.getPrivateKey("sign");
       return await getCrypto().subtle.sign(
         {
           name: "RSA-PSS",

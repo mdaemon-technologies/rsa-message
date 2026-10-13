@@ -1,4 +1,5 @@
 import RSAMessage from "./rsa-message";
+import { shownDeprecations } from "./util";
 
 function mockTransport(message: string, sender: string, verifyKey: string): Promise<{ sender: string, verifyKey: string, message: string }> {
   const transport = {
@@ -841,6 +842,190 @@ describe('RSAMessage', () => {
         expect(result.message).toBe(message);
         expect(result.verified).toBe(true); // Always true for shared keys
       });
+    });
+  });
+
+  describe('initKeySet() / importKeySet()', () => {
+    test('generates private keys that cannot be exported', async () => {
+      const keySet = await sender.initKeySet();
+      expect(keySet.privateKey.extractable).toBe(false);
+      expect(keySet.signKey.extractable).toBe(false);
+      await expect(crypto.subtle.exportKey('jwk', keySet.privateKey)).rejects.toThrow();
+      await expect(crypto.subtle.exportKey('jwk', keySet.signKey)).rejects.toThrow();
+      expect(sender.privatekey).toBe('');
+      expect(sender.signkey).toBe('');
+      expect(sender.publickey).toBe(keySet.publicKey);
+      expect(sender.verifykey).toBe(keySet.verifyKey);
+    });
+
+    test('a reused key set decrypts, signs and unwraps the master key', async () => {
+      const keySet = await sender.initKeySet();
+      const reloaded = new RSAMessage();
+      await reloaded.initKeySet({ ...keySet });          // stands in for an IndexedDB read
+      await receiver.init();
+      receiver.setPublicKey('me', keySet.publicKey, keySet.verifyKey);
+      reloaded.setPublicKey('them', receiver.publickey, receiver.verifykey);
+
+      const sent = await receiver.encryptMessage('hello', 'me');
+      expect(await reloaded.decryptMessage(sent, 'them')).toBe('hello');               // decrypt path
+      expect((await reloaded.decryptMessageUnsafe(sent, 'them')).message).toBe('hello');
+
+      const reply = await reloaded.encryptMessage('hi back', 'them');                  // sign path
+      expect(await receiver.decryptMessage(reply, 'me')).toBe('hi back');
+
+      reloaded.setPublicKey('self', keySet.publicKey, keySet.verifyKey);
+      await reloaded.generateAndSetMasterAESKey();
+      await expect(reloaded.getDecryptedMasterAESKey()).resolves.toBeTruthy();         // master key unwrap
+    });
+
+    test('importKeySet() keeps the public keys and decrypts what was encrypted for the old keys', async () => {
+      const old = await sender.init();
+      await receiver.init();
+      receiver.setPublicKey('me', old.publicKey, old.verifyKey);
+      const sentBefore = await receiver.encryptMessage('history', 'me');
+
+      const migrated = new RSAMessage();
+      const keySet = await migrated.importKeySet(old.publicKey, sender.privatekey, old.verifyKey, sender.signkey);
+      expect(keySet.publicKey).toBe(old.publicKey);
+      expect(keySet.verifyKey).toBe(old.verifyKey);
+      expect(keySet.privateKey.extractable).toBe(false);
+      expect(keySet.signKey.extractable).toBe(false);
+      expect(migrated.privatekey).toBe('');
+
+      migrated.setPublicKey('them', receiver.publickey, receiver.verifykey);
+      expect(await migrated.decryptMessage(sentBefore, 'them')).toBe('history');
+
+      // the old verify key still verifies what the migrated sign key signs
+      const reply = await migrated.encryptMessage('still me', 'them');
+      expect(await receiver.decryptMessage(reply, 'me')).toBe('still me');
+    });
+
+    test('rejects a key set whose private key can be exported', async () => {
+      const exportable = await crypto.subtle.generateKey(
+        { name: 'RSA-OAEP', modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: 'SHA-256' },
+        true, ['encrypt', 'decrypt']);
+      const keySet = await sender.initKeySet();
+      await expect(receiver.initKeySet({ ...keySet, privateKey: (exportable as CryptoKeyPair).privateKey }))
+        .rejects.toThrow('non-extractable');
+    });
+
+    test('rejects an incomplete key set', async () => {
+      const keySet = await sender.initKeySet();
+      await expect(receiver.initKeySet({ ...keySet, publicKey: '' })).rejects.toThrow('non-extractable');
+      await expect(receiver.initKeySet({ ...keySet, signKey: undefined as unknown as CryptoKey })).rejects.toThrow();
+    });
+
+    test('importKeySet() rejects a private key string that cannot be imported', async () => {
+      const old = await sender.init();
+      await expect(receiver.importKeySet(old.publicKey, 'not-a-key', old.verifyKey, sender.signkey))
+        .rejects.toThrow('Failed to import private key');
+    });
+
+    test('init() after initKeySet() switches back to string keys', async () => {
+      await sender.initKeySet();
+      await sender.init();
+      expect(sender.privatekey).toBeTruthy();
+      expect(sender.signkey).toBeTruthy();
+      await receiver.init();
+      receiver.setPublicKey('me', sender.publickey, sender.verifykey);
+      sender.setPublicKey('them', receiver.publickey, receiver.verifykey);
+      const sent = await receiver.encryptMessage('back to strings', 'me');
+      expect(await sender.decryptMessage(sent, 'them')).toBe('back to strings');
+    });
+
+    test('init() with saved strings after initKeySet() uses those strings', async () => {
+      const saved = await receiver.init();
+      await sender.initKeySet();
+      await sender.init(saved.publicKey, receiver.privatekey, saved.verifyKey, receiver.signkey);
+      expect(sender.privatekey).toBe(receiver.privatekey);
+      const third = new RSAMessage();
+      await third.init();
+      third.setPublicKey('saved', saved.publicKey, saved.verifyKey);
+      sender.setPublicKey('third', third.publickey, third.verifykey);
+      const sent = await third.encryptMessage('saved strings', 'saved');
+      expect(await sender.decryptMessage(sent, 'third')).toBe('saved strings');
+    });
+
+    test('rejects a key set whose private keys are swapped', async () => {
+      const keySet = await sender.initKeySet();
+      await expect(receiver.initKeySet({ ...keySet, privateKey: keySet.signKey, signKey: keySet.privateKey }))
+        .rejects.toThrow('non-extractable');
+    });
+
+    test('rejects a key set whose private keys belong to other public keys', async () => {
+      const keySet = await sender.initKeySet();
+      const other = await receiver.initKeySet();
+      const third = new RSAMessage();
+      await expect(third.initKeySet({ ...keySet, privateKey: other.privateKey })).rejects.toThrow('do not match');
+      await expect(third.initKeySet({ ...keySet, signKey: other.signKey })).rejects.toThrow('do not match');
+      expect(third.publickey).toBe('');   // a rejected key set leaves the instance unchanged
+    });
+
+    test('importKeySet() rejects missing or mismatched public keys', async () => {
+      const old = await sender.init();
+      const other = await receiver.init();
+      await expect(new RSAMessage().importKeySet('', sender.privatekey, old.verifyKey, sender.signkey))
+        .rejects.toThrow('both public keys');
+      await expect(new RSAMessage().importKeySet(other.publicKey, sender.privatekey, old.verifyKey, sender.signkey))
+        .rejects.toThrow('do not match');
+      await expect(new RSAMessage().importKeySet(old.publicKey, sender.privatekey, other.verifyKey, sender.signkey))
+        .rejects.toThrow('do not match');
+    });
+  });
+
+  describe('deprecation warnings', () => {
+    const warningCodes = (spy: jest.SpyInstance) => spy.mock.calls.map(call => call[1].code);
+
+    beforeEach(() => {
+      shownDeprecations.clear();
+    });
+
+    test('init(), privatekey and signkey each warn once', async () => {
+      const emitWarning = jest.spyOn(process, 'emitWarning').mockImplementation(() => {});
+      try {
+        await sender.init();
+        await receiver.init();
+        void sender.privatekey;
+        void receiver.privatekey;
+        void sender.signkey;
+        void receiver.signkey;
+        expect(warningCodes(emitWarning)).toEqual(
+          ['RSA_MESSAGE_DEP_INIT', 'RSA_MESSAGE_DEP_PRIVATEKEY', 'RSA_MESSAGE_DEP_SIGNKEY']);
+        for (const [message, options] of emitWarning.mock.calls) {
+          expect(message).toContain('will be removed in 3.0.0');
+          expect(options).toMatchObject({ type: 'DeprecationWarning' });
+        }
+      } finally {
+        emitWarning.mockRestore();
+      }
+    });
+
+    test('the key set API does not warn', async () => {
+      const emitWarning = jest.spyOn(process, 'emitWarning').mockImplementation(() => {});
+      try {
+        const keySet = await sender.initKeySet();
+        await receiver.initKeySet({ ...keySet });
+        void receiver.publickey;
+        void receiver.verifykey;
+        expect(emitWarning).not.toHaveBeenCalled();
+      } finally {
+        emitWarning.mockRestore();
+      }
+    });
+
+    test('uses console.warn where process.emitWarning is not available, as in browsers', async () => {
+      const emitWarning = process.emitWarning;
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      process.emitWarning = undefined as unknown as typeof process.emitWarning;
+      try {
+        await sender.init();
+        await sender.init();
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0][0]).toContain('[RSA_MESSAGE_DEP_INIT] DeprecationWarning: RSAMessage.init() is deprecated');
+      } finally {
+        process.emitWarning = emitWarning;
+        warn.mockRestore();
+      }
     });
   });
 });

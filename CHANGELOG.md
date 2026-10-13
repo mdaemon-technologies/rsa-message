@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - Unreleased
+
+### Added
+- `initKeySet(keySet?)` generates RSA key pairs whose private keys are non-extractable `CryptoKey`s, or reuses a key set returned earlier (for example one stored in IndexedDB). The public keys stay exportable strings in the same format as `init()`.
+- `importKeySet(publicKey, privateKey, verifyKey, signKey)` converts keys saved as strings into a non-extractable key set with the same public keys, so earlier messages can still be decrypted.
+- `RSAKeySet` type, exported from the package entry point.
+- Key sets passed to `initKeySet()` or `importKeySet()` are rejected with `KeyImportError` if a key is missing, a private key is extractable or has the wrong algorithm, or the private keys do not belong to the public keys.
+
+### Changed
+- Decryption, the master AES key unwrap and signing use the non-extractable private keys when they are set. Instances initialized with `init()` behave exactly as before.
+- The README recommends `initKeySet()` and IndexedDB instead of saving private key strings in browser storage, and its examples use `initKeySet()`.
+
+### Deprecated
+- `init()` and the `privatekey` and `signkey` getters, to be removed in 3.0.0. Use `initKeySet()` to generate or reuse keys, and `importKeySet()` once to convert keys saved as strings (`importKeySet()` is not deprecated). Each deprecated API logs a warning the first time it is used on a page or in a process: a `DeprecationWarning` through `process.emitWarning()` in Node (codes `RSA_MESSAGE_DEP_INIT`, `RSA_MESSAGE_DEP_PRIVATEKEY`, `RSA_MESSAGE_DEP_SIGNKEY`), or `console.warn()` in browsers.
+
+## [2.2.4] - 2026-09-21
+
+### Changed
+- `package.json` declares `"engines": { "node": ">=18" }`.
+- Rewrote the README header, badges and usage sections.
+
 ## [2.2.3] - 2026-05-19
 
 ### Changed

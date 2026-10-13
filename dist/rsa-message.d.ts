@@ -1,4 +1,5 @@
-import { KeyPairOutput, ECDHPublicKey, SharedKeyData } from "./crypto-types";
+import { KeyPairOutput, ECDHPublicKey, SharedKeyData, RSAKeySet } from "./crypto-types";
+export type { RSAKeySet } from "./crypto-types";
 export interface IDecryptionResult {
     message: string;
     verified: boolean;
@@ -14,6 +15,8 @@ declare class RSAMessage {
     private publicKey;
     private verifyKey;
     private signKey;
+    private privateCryptoKey;
+    private signCryptoKey;
     private publicKeys;
     private verifyKeys;
     private ecdhPrivateKey;
@@ -71,7 +74,15 @@ declare class RSAMessage {
     constructor();
     get publickey(): string;
     get verifykey(): string;
+    /**
+     * @deprecated Since 2.3.0; will be removed in 3.0.0. Private keys from initKeySet() cannot be exported,
+     * so store the RSAKeySet it returns instead of this string.
+     */
     get privatekey(): string;
+    /**
+     * @deprecated Since 2.3.0; will be removed in 3.0.0. Private keys from initKeySet() cannot be exported,
+     * so store the RSAKeySet it returns instead of this string.
+     */
     get signkey(): string;
     generateAESKey(): Promise<CryptoKey>;
     /**
@@ -83,8 +94,41 @@ declare class RSAMessage {
      * @param {string} [verifyKey] - The public key for signature verification
      * @param {string} [signKey] - The private key for signing
      * @returns {Promise<{publicKey: string, verifyKey: string}>} The public keys for encryption and verification
+     * @deprecated Since 2.3.0; will be removed in 3.0.0. Use initKeySet() to generate or reuse keys whose private
+     * halves cannot be exported, and importKeySet() once to convert keys saved as strings.
      */
     init(publicKey?: string, privateKey?: string, verifyKey?: string, signKey?: string): Promise<KeyPairOutput>;
+    /**
+     * Initializes RSA keys whose private halves cannot be exported. Pass a key set returned by an
+     * earlier initKeySet() or importKeySet() (for example read back from IndexedDB) to reuse it;
+     * otherwise new key pairs are generated. The private CryptoKeys survive structured clone, so
+     * they can be stored, but exportKey() rejects them and the privatekey and signkey getters
+     * return "".
+     *
+     * @param {RSAKeySet} [keySet] - A key set to reuse
+     * @returns {Promise<RSAKeySet>} The key set in use, to store for the next session
+     * @throws {KeyImportError} If the key set is incomplete, its private keys are extractable or
+     *   have the wrong algorithm, or they do not belong to its public keys
+     */
+    initKeySet(keySet?: RSAKeySet): Promise<RSAKeySet>;
+    /**
+     * Converts keys saved from init()'s exported strings into a key set whose private halves
+     * cannot be exported, and initializes with it. The public keys are unchanged, so anything
+     * encrypted for the old keys can still be decrypted.
+     *
+     * @param {string} publicKey - The saved public key for encryption
+     * @param {string} privateKey - The saved private key for decryption
+     * @param {string} verifyKey - The saved public key for signature verification
+     * @param {string} signKey - The saved private key for signing
+     * @returns {Promise<RSAKeySet>} The converted key set, to store in place of the strings
+     * @throws {KeyImportError} If a key is missing, a private key string cannot be imported, or the
+     *   private keys do not belong to the public keys
+     */
+    importKeySet(publicKey: string, privateKey: string, verifyKey: string, signKey: string): Promise<RSAKeySet>;
+    private checkKeySet;
+    private useKeySet;
+    private genKeySetPair;
+    private getPrivateKey;
     private genKeyPair;
     private importPrivateKey;
     private importPublicKey;

@@ -50,3 +50,10 @@ export interface ECDHConfig {
   name: 'ECDH';
   public: CryptoKey;
 }
+
+export interface RSAKeySet {
+  publicKey: string;     // exported public encryption key, the same format init() returns
+  verifyKey: string;     // exported public verification key
+  privateKey: CryptoKey; // non-extractable RSA-OAEP decryption key
+  signKey: CryptoKey;    // non-extractable RSA-PSS signing key
+}

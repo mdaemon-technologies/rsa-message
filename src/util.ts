@@ -31,3 +31,21 @@ export const base64ToBuffer = (base64String: string): ArrayBuffer => {
   }
   return buffer;
 }
+
+// Codes of the deprecation warnings already shown; each is shown once per page or process
+export const shownDeprecations = new Set<string>();
+
+export const warnDeprecated = (code: string, message: string): void => {
+  if (shownDeprecations.has(code)) {
+    return;
+  }
+  shownDeprecations.add(code);
+
+  // Node: a DeprecationWarning honours --no-deprecation and --throw-deprecation
+  if (typeof process !== "undefined" && typeof process.emitWarning === "function") {
+    process.emitWarning(message, { type: "DeprecationWarning", code });
+  }
+  else if (typeof console !== "undefined") {
+    console.warn(`[${code}] DeprecationWarning: ${message}`);
+  }
+}
