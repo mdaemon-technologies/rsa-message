@@ -1,16 +1,17 @@
-import { encode, decode } from "base64util";
-import { 
-  getCrypto, 
-  getTextEncoder, 
-  getTextDecoder, 
+import {
+  getCrypto,
+  getTextEncoder,
+  getTextDecoder,
   bufferToBase64,
   base64ToBuffer,
+  encodeJson,
+  decodeJson,
+  bytesToBinaryString,
+  binaryStringToBytes,
   warnDeprecated
 } from "./util";
 import {
-  CryptoKeyOptions,
   RSAKeyPair,
-  RSAConfig,
   KeyPairOutput,
   AESConfig,
   ECDHKeyPair,
@@ -20,7 +21,9 @@ import {
   ECDHConfig,
   RSAKeySet
 } from "./crypto-types";
-import { CryptoOperationError, KeyImportError } from "./error-types";
+import { KeyImportError, cryptoOperationError, keyImportError } from "./error-types";
+import { AES_GCM_256, ECDH_P256, RSA_OAEP, RSA_PSS } from "./crypto-params";
+import { generateRSAKeyPair, exportKeyString, importRSAKey, aesGcmEncrypt, aesGcmDecrypt } from "./crypto-ops";
 
 export type { RSAKeySet } from "./crypto-types";
 
@@ -54,25 +57,16 @@ class RSAMessage {
   private ecdhPublicKeys: Map<string, CryptoKey> = new Map();
   private sharedKeys: Map<string, CryptoKey> = new Map();
   // Master AES key (encrypted, as base64 string)
-  private encryptedMasterAESKey: string | null = null;  // Track who encrypted the master AES key for proper verification
+  private encryptedMasterAESKey: string | null = null;
+  // Track who encrypted the master AES key for proper verification
   private masterAESKeyEncryptor: string | null = null;
-  
+
   /**
    * Generates a new AES master key, encrypts it with the current user's publicKey, and sets it as the master key.
    * @returns {Promise<string>} The encrypted master AES key (base64 string)
    */
-  public async generateAndSetMasterAESKey(): Promise<string> {    // Generate AES key
-    const aesKey = await this.generateAESKey();
-    
-    // Export as JWK
-    const exported = await getCrypto().subtle.exportKey("jwk", aesKey);
-    const exportedStr = JSON.stringify(exported);
-    
-    // Encrypt with our own publicKey
-    const encrypted = await this.encryptMessage(exportedStr, "self");
-    const exportedEncrypted = this.exportEncryptedMessage(encrypted);
-    
-    // Store the encrypted master key
+  public async generateAndSetMasterAESKey(): Promise<string> {
+    const exportedEncrypted = await this.encryptKeyForUser(await this.generateAESKey(), "self");
     this.encryptedMasterAESKey = exportedEncrypted;
     this.masterAESKeyEncryptor = "self"; // We encrypted it ourselves
     return exportedEncrypted;
@@ -82,7 +76,7 @@ class RSAMessage {
    * Sets the encrypted master AES key (base64 string, encrypted with this user's publicKey)
    * @param {string} encryptedKey - The encrypted master AES key (base64 string)
    * @param {string} encryptor - The user ID who encrypted the key (defaults to "self")
-   */  
+   */
   public setEncryptedMasterAESKey(encryptedKey: string, encryptor: string = "self") {
     this.encryptedMasterAESKey = encryptedKey;
     this.masterAESKeyEncryptor = encryptor;
@@ -93,115 +87,37 @@ class RSAMessage {
    * @returns {Promise<CryptoKey>} The decrypted AES-GCM key
    */
   public async getDecryptedMasterAESKey(): Promise<CryptoKey> {
-    if (!this.encryptedMasterAESKey) throw new Error("No master AES key set");
-    // Decrypt using the known encryptor for signature verification, but our own private key for decryption
-    const encrypted = this.importEncryptedMessage(this.encryptedMasterAESKey);
-    
-    // Special handling for master AES key: we decrypt with our own private key but verify signature from the encryptor
-    const { iv, encryptedMessage, encryptedAESKey, signature } = encrypted;
-    
+    const { iv, encryptedMessage, encryptedAESKey, signature } = this.importEncryptedMessage(this.requireMasterAESKey());
     if (!encryptedAESKey) {
       throw new Error("Master AES key must have been encrypted with RSA");
     }
-    
-    // Decrypt the AES key with our own private key
-    let privateKey: CryptoKey;
-    try {
-      privateKey = await this.getPrivateKey("decrypt");
-    } catch (error) {
-      throw new Error(`Failed to import private key: ${error}`);
-    }
 
-    let aesKeyData: ArrayBuffer;
-    try {
-      aesKeyData = await getCrypto().subtle.decrypt(
-        {
-          name: "RSA-OAEP",
-        } as RSAConfig,
-        privateKey,
-        new Uint8Array(encryptedAESKey)
-      );
-    } catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
-    }
+    // Decrypt with our own private key, but verify the signature of whoever encrypted it
+    const aesKey = await this.unwrapAESKey(encryptedAESKey);
+    const message = getTextDecoder().decode(await aesGcmDecrypt(aesKey, iv, encryptedMessage, "Failed to decrypt message"));
+    await this.requireVerifiedSignature(signature, message, this.masterAESKeyEncryptor || "self");
 
-    // Decrypt the message content with the AES key
-    let aesKey: CryptoKey;
+    // A payload that is not a JWK fails as a "verify" error, as it always has
     try {
-      aesKey = await getCrypto().subtle.importKey(
-        "raw",
-        aesKeyData,
-        "AES-GCM",
-        true,
-        ["decrypt"]
-      );
-    } catch (error) {
-      throw new KeyImportError(`Failed to import AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'private',
-        error instanceof Error ? error : undefined
-      );
-    }
-
-    let decryptedMessage: ArrayBuffer;
-    try {
-      decryptedMessage = await getCrypto().subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv,
-        } as AESConfig,
-        aesKey,
-        new Uint8Array(encryptedMessage)
-      );
-    } catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt message: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
-    }
-
-    // Verify the signature using the encryptor's verify key
-    try {
-      const decoder = getTextDecoder();
-      const message = decoder.decode(decryptedMessage);
-      const verified = await this.verifySignature(signature, message, this.masterAESKeyEncryptor || "self");
-      if (!verified) {
-        throw new Error("Signature verification failed");
-      }
-      
-      // Parse and return the AES key
-      const jwk = JSON.parse(message);
       return await getCrypto().subtle.importKey(
         "jwk",
-        jwk,
+        JSON.parse(message),
         { name: "AES-GCM" },
         true,
         ["encrypt", "decrypt"]
       );
     } catch (error) {
-      throw new CryptoOperationError(`Failed to verify signature: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'verify',
-        error instanceof Error ? error : undefined
-      );
+      throw cryptoOperationError("Failed to verify signature", "verify", error);
     }
   }
 
-  /**   * Encrypts the current master AES key with another user's publicKey and exports it (base64 string).
+  /**
+   * Encrypts the current master AES key with another user's publicKey and exports it (base64 string).
    * @param {string} userId - The user to encrypt the key for
    * @returns {Promise<string>} The encrypted master AES key (base64 string)
    */
   public async exportMasterAESKeyForUser(userId: string): Promise<string> {
-    if (!this.encryptedMasterAESKey) throw new Error("No master AES key set");
-    
-    // Decrypt our master key
-    const aesKey = await this.getDecryptedMasterAESKey();
-    const exported = await getCrypto().subtle.exportKey("jwk", aesKey);
-    const exportedStr = JSON.stringify(exported);
-    // Encrypt with the other user's publicKey
-    const encrypted = await this.encryptMessage(exportedStr, userId);
-    return this.exportEncryptedMessage(encrypted);
+    return await this.encryptKeyForUser(await this.getDecryptedMasterAESKey(), userId);
   }
 
   /**
@@ -212,24 +128,16 @@ class RSAMessage {
   public async setMasterAESKeyFromEncrypted(encryptedKey: string, encryptor: string = "self"): Promise<void> {
     this.encryptedMasterAESKey = encryptedKey;
     this.masterAESKeyEncryptor = encryptor;
-    // Optionally, test decryption now to verify
+    // Decrypting now verifies the key before it is used
     const aesKey = await this.getDecryptedMasterAESKey();
     if (encryptor !== "self") {
-      // Export as JWK
-      const exported = await getCrypto().subtle.exportKey("jwk", aesKey);
-      const exportedStr = JSON.stringify(exported);
-      
       // Ensure our own public key is set up for re-encryption
       if (!this.publicKeys.has("self")) {
         this.setPublicKey("self", this.publicKey, this.verifyKey);
       }
-      
+
       // Re-encrypt with our own publicKey, so that if the encryptor's verify key changes we still have a valid copy
-      const encrypted = await this.encryptMessage(exportedStr, "self");
-      const exportedEncrypted = this.exportEncryptedMessage(encrypted);
-      
-      // Store the encrypted master key
-      this.encryptedMasterAESKey = exportedEncrypted;
+      this.encryptedMasterAESKey = await this.encryptKeyForUser(aesKey, "self");
       this.masterAESKeyEncryptor = "self"; // We encrypted it ourselves
     }
   }
@@ -240,22 +148,7 @@ class RSAMessage {
    * @returns {Promise<IRSAEncryptedMessage>} Object containing the encrypted message, iv, and signature
    */
   public async encryptWithMasterAESKey(message: string): Promise<IRSAEncryptedMessage> {
-    if (!this.encryptedMasterAESKey) throw new Error("No master AES key set");
-    const aesKey = await this.getDecryptedMasterAESKey();
-    const encoder = getTextEncoder();
-    const data = encoder.encode(message);
-    const iv = getCrypto().getRandomValues(new Uint8Array(12));
-    const encryptedMessage = await getCrypto().subtle.encrypt(
-      { name: "AES-GCM", iv: iv as BufferSource },
-      aesKey,
-      data
-    );
-    const signature = await this.signMessage(message);
-    return {
-      iv,
-      encryptedMessage,
-      signature
-    };
+    return await this.encryptAndSign(await this.getDecryptedMasterAESKey(), message);
   }
 
   /**
@@ -265,36 +158,9 @@ class RSAMessage {
    * @returns {Promise<string>} The decrypted message
    */
   public async decryptWithMasterAESKey(encryptedData: IRSAEncryptedMessage, sender: string): Promise<string> {
-    if (!this.encryptedMasterAESKey) throw new Error("No master AES key set");
-    const aesKey = await this.getDecryptedMasterAESKey();
-    const { iv, encryptedMessage, signature } = encryptedData;
-    let decryptedMessage: ArrayBuffer;
-    try {
-      decryptedMessage = await getCrypto().subtle.decrypt(
-        { name: "AES-GCM", iv: iv as BufferSource },
-        aesKey,
-        new Uint8Array(encryptedMessage)
-      );
-    } catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt with master AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
-    }
-    try {
-      const decoder = getTextDecoder();
-      const message = decoder.decode(decryptedMessage);
-      const verified = await this.verifySignature(signature, message, sender);
-      if (!verified) {
-        throw new Error("Signature verification failed");
-      }
-      return message;
-    } catch (error) {
-      throw new CryptoOperationError(`Failed to verify signature: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'verify',
-        error instanceof Error ? error : undefined
-      );
-    }
+    const message = await this.decryptMasterAESKeyMessage(encryptedData);
+    await this.requireVerifiedSignature(encryptedData.signature, message, sender);
+    return message;
   }
 
   /**
@@ -304,36 +170,8 @@ class RSAMessage {
    * @returns {Promise<IDecryptionResult>} Object containing the decrypted message and verification status
    */
   public async decryptWithMasterAESKeyUnsafe(encryptedData: IRSAEncryptedMessage, sender: string): Promise<IDecryptionResult> {
-    if (!this.encryptedMasterAESKey) throw new Error("No master AES key set");
-    const aesKey = await this.getDecryptedMasterAESKey();
-    const { iv, encryptedMessage, signature } = encryptedData;
-    let decryptedMessage: ArrayBuffer;
-    try {
-      decryptedMessage = await getCrypto().subtle.decrypt(
-        { name: "AES-GCM", iv: iv as BufferSource },
-        aesKey,
-        new Uint8Array(encryptedMessage)
-      );
-    } catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt with master AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
-    }
-    
-    const decoder = getTextDecoder();
-    const message = decoder.decode(decryptedMessage);
-    
-    // Attempt signature verification but don't throw on failure
-    let verified = false;
-    try {
-      verified = await this.verifySignature(signature, message, sender);
-    } catch (error) {
-      // Signature verification failed, but we still return the message
-      verified = false;
-    }
-    
-    return { message, verified };
+    const message = await this.decryptMasterAESKeyMessage(encryptedData);
+    return { message, verified: await this.isSignatureVerified(encryptedData.signature, message, sender) };
   }
 
   constructor() {
@@ -373,20 +211,13 @@ class RSAMessage {
 
 
   public async generateAESKey() {
-    return await getCrypto().subtle.generateKey(
-      {
-        name: "AES-GCM",
-        length: 256,
-      },
-      true,
-      ["encrypt", "decrypt"]
-    );
+    return await getCrypto().subtle.generateKey(AES_GCM_256, true, ["encrypt", "decrypt"]);
   }
 
   /**
    * Initializes RSA keys for encryption and signing. If keys are provided, they will be used.
    * Otherwise, new key pairs will be generated.
-   * 
+   *
    * @param {string} [publicKey] - The public key for encryption
    * @param {string} [privateKey] - The private key for decryption
    * @param {string} [verifyKey] - The public key for signature verification
@@ -404,7 +235,7 @@ class RSAMessage {
     if (publicKey && privateKey && verifyKey && signKey) {
       this.publicKey = publicKey;
       this.privateKey = privateKey;
-      this.verifyKey = verifyKey; 
+      this.verifyKey = verifyKey;
       this.signKey = signKey;
       return { publicKey: this.publicKey, verifyKey: this.verifyKey };
     }
@@ -484,16 +315,14 @@ class RSAMessage {
   // Proves each private key belongs to its public key, so a mismatched set fails here, not on first use
   private checkKeySet = async (keySet: RSAKeySet): Promise<void> => {
     const probe = getCrypto().getRandomValues(new Uint8Array(32));
-    const rsaPss = { name: "RSA-PSS", saltLength: 32 } as RSAConfig;
     let matches = false;
     let cause: Error | undefined;
     try {
-      const encrypted = await getCrypto().subtle.encrypt({ name: "RSA-OAEP" } as RSAConfig,
-        await this.importPublicKey(keySet.publicKey, "encrypt"), probe);
-      const decrypted = new Uint8Array(await getCrypto().subtle.decrypt({ name: "RSA-OAEP" } as RSAConfig, keySet.privateKey, encrypted));
-      const signature = await getCrypto().subtle.sign(rsaPss, keySet.signKey, probe);
+      const encrypted = await getCrypto().subtle.encrypt(RSA_OAEP, await this.importPublicKey(keySet.publicKey, "encrypt"), probe);
+      const decrypted = new Uint8Array(await getCrypto().subtle.decrypt(RSA_OAEP, keySet.privateKey, encrypted));
+      const signature = await getCrypto().subtle.sign(RSA_PSS, keySet.signKey, probe);
       matches = decrypted.length === probe.length && decrypted.every((b, i) => b === probe[i]) &&
-        await getCrypto().subtle.verify(rsaPss, await this.importPublicKey(keySet.verifyKey, "verify"), signature, probe);
+        await getCrypto().subtle.verify(RSA_PSS, await this.importPublicKey(keySet.verifyKey, "verify"), signature, probe);
     } catch (error) {
       cause = error instanceof Error ? error : undefined;
     }
@@ -512,19 +341,9 @@ class RSAMessage {
   }
 
   private genKeySetPair = async (type: "decrypt" | "sign"): Promise<{ publicKey: string, privateKey: CryptoKey }> => {
-    const keyPair = await getCrypto().subtle.generateKey(
-      {
-        name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
-        modulusLength: 2048,
-        publicExponent: new Uint8Array([1, 0, 1]),
-        hash: "SHA-256",
-      } as RsaHashedKeyGenParams,
-      false, // the private key cannot be exported; WebCrypto always makes the RSA public key exportable
-      type === "decrypt" ? ["encrypt", "decrypt"] : ["sign", "verify"]
-    ) as CryptoKeyPair;
-
-    const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.publicKey);
-    return { publicKey: encode(JSON.stringify(publicKeyRaw)), privateKey: keyPair.privateKey };
+    // the private key cannot be exported; WebCrypto always makes the RSA public key exportable
+    const keyPair = await generateRSAKeyPair(type, false);
+    return { publicKey: await exportKeyString(keyPair.publicKey), privateKey: keyPair.privateKey };
   };
 
   private getPrivateKey = async (type: "decrypt" | "sign"): Promise<CryptoKey> => {
@@ -537,105 +356,33 @@ class RSAMessage {
   };
 
   private genKeyPair = async (type: "decrypt" | "sign" = "decrypt"): Promise<RSAKeyPair> => {
-    const usage: KeyUsage[] = type === "decrypt" ? ["encrypt", "decrypt"] : ["sign", "verify"];
-    const keyPair = await getCrypto().subtle.generateKey(
-      {
-       name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
-       modulusLength: 2048,
-       publicExponent: new Uint8Array([1, 0, 1]),
-       hash: "SHA-256",
-      } as RsaHashedKeyGenParams,
-      true,
-      usage
-    );
-    
-    const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", (keyPair as CryptoKeyPair).publicKey);
-    const privateKeyRaw = await getCrypto().subtle.exportKey("jwk", (keyPair as CryptoKeyPair).privateKey);
-    return { publicKey: encode(JSON.stringify(publicKeyRaw)), privateKey: encode(JSON.stringify(privateKeyRaw)) };
+    const keyPair = await generateRSAKeyPair(type, true);
+    return { publicKey: await exportKeyString(keyPair.publicKey), privateKey: await exportKeyString(keyPair.privateKey) };
   };
 
-  private importPrivateKey = async (privateKey: string, type: "sign" | "decrypt") => {
-    const options: CryptoKeyOptions = {
-      name: type === "decrypt" ? "RSA-OAEP" : "RSA-PSS",
-      hash: "SHA-256",
-    };
+  private importPrivateKey = async (privateKey: string, type: "sign" | "decrypt") =>
+    await importRSAKey(privateKey, type, "private");
 
-    if (type === "sign") {
-      options.saltLength = 32;
-    }
-    
-    try {
-      const rsaPrivateKey = JSON.parse(decode(privateKey));
-      return await getCrypto().subtle.importKey(
-        "jwk",
-        rsaPrivateKey,
-        options,
-        false,
-        [type]
-      );
+  private importPublicKey = async (publicKey: string, type: "encrypt" | "verify"): Promise<CryptoKey> =>
+    await importRSAKey(publicKey, type, "public");
 
-    } catch (error) {
-      throw new KeyImportError(`Failed to import private key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'private',
-        error instanceof Error ? error : undefined
-      );
-    }
-  };
-
-  private importPublicKey = async (publicKey: string, type: "encrypt" | "verify"): Promise<CryptoKey> => {
-    const options: CryptoKeyOptions = {
-      name: "encrypt" === type ? "RSA-OAEP" : "RSA-PSS",
-      hash: "SHA-256",
-    };
-
-    if (type === "verify") {
-      options.saltLength = 32;
-    }
-
-    try {
-      const rsaPublicKey = JSON.parse(decode(publicKey));
-      return await getCrypto().subtle.importKey(
-        "jwk",
-        rsaPublicKey,
-        options,
-        false,
-        [type]
-      );
-
-    } catch (error) {
-      throw new KeyImportError(`Failed to import public key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'public',
-        error instanceof Error ? error : undefined
-      );
-    }
-  };
-
-  /**
-   * Encrypts a message using RSA-AES hybrid encryption
-   * @param message - The plaintext message to encrypt
-   * @param userId - The ID of the recipient user whose public key will be used
-   * @returns {Promise<IRSAEncryptedMessage>} Object containing the encrypted message components:
-   *  - iv: Initialization vector for AES-GCM
-   *  - encryptedMessage: The AES encrypted message
-   *  - encryptedAESKey: The RSA encrypted AES key
-   *  - signature: Digital signature of the message
-   * @throws {Error} If public key is not found for the user
-   */
   /**
    * Encrypts a message using RSA-AES hybrid encryption, using the master AES key if set, otherwise generates a new AES key.
    * @param message - The plaintext message to encrypt
    * @param userId - The ID of the recipient user whose public key will be used
    * @param useMasterAESKey - If true, use the master AES key (if set)
-   * @returns {Promise<IRSAEncryptedMessage>} Object containing the encrypted message components
+   * @returns {Promise<IRSAEncryptedMessage>} Object containing the encrypted message components:
+   *  - iv: Initialization vector for AES-GCM
+   *  - encryptedMessage: The AES encrypted message
+   *  - encryptedAESKey: The RSA encrypted AES key (undefined when the master AES key is used)
+   *  - signature: Digital signature of the message
+   * @throws {Error} If public key is not found for the user
    */
   public encryptMessage = async (message: string, userId: string, useMasterAESKey: boolean = false) => {
     const publicKeyRaw = this.publicKeys.get(userId);
     if (!publicKeyRaw) {
       throw new Error("Public key not found for user");
     }
-
-    const encoder = getTextEncoder();
-    const data = encoder.encode(message);
 
     let aesKey: CryptoKey;
     let encryptedAESKey: ArrayBuffer | undefined;
@@ -649,26 +396,10 @@ class RSAMessage {
       // Export and encrypt the AES key with RSA
       const publicKey = await this.importPublicKey(publicKeyRaw, "encrypt");
       const aesKeyData = await getCrypto().subtle.exportKey("raw", aesKey);
-      encryptedAESKey = await getCrypto().subtle.encrypt(
-        {
-          name: "RSA-OAEP",
-        } as RSAConfig,
-        publicKey,
-        aesKeyData
-      );
+      encryptedAESKey = await getCrypto().subtle.encrypt(RSA_OAEP, publicKey, aesKeyData);
     }
 
-    const iv = getCrypto().getRandomValues(new Uint8Array(12)); // 12-byte IV for AES-GCM
-    const encryptedMessage = await getCrypto().subtle.encrypt(
-      {
-        name: "AES-GCM",
-        iv,
-      } as AESConfig,
-      aesKey,
-      data
-    );
-
-    const signature = await this.signMessage(message);
+    const { iv, encryptedMessage, signature } = await this.encryptAndSign(aesKey, message);
 
     return {
       iv,
@@ -677,6 +408,7 @@ class RSAMessage {
       signature,
     } as IRSAEncryptedMessage;
   };
+
   /**
    * Decrypts an encrypted message and verifies its signature. If useMasterAESKey is true and the master key is set, uses it for decryption.
    * @param {IRSAEncryptedMessage} encryptedData - Object containing the encrypted message components:
@@ -693,96 +425,10 @@ class RSAMessage {
    * @throws {Error} If message decryption fails
    * @throws {Error} If signature verification fails
    */
-  public decryptMessage = async (encryptedData: IRSAEncryptedMessage, sender: string, useMasterAESKey: boolean = false) => {
-    const { iv, encryptedMessage, encryptedAESKey, signature } = encryptedData;
-    let aesKey: CryptoKey;
-
-    if (useMasterAESKey && this.encryptedMasterAESKey) {
-      aesKey = await this.getDecryptedMasterAESKey();
-    } else if (encryptedAESKey) {
-      // Standard RSA-AES decryption
-      let privateKey: CryptoKey;
-      try {
-        privateKey = await this.getPrivateKey("decrypt");
-      }
-      catch (error) {
-        throw new Error(`Failed to import private key: ${error}`);
-      }
-
-      // Decrypt the AES key with RSA
-      let aesKeyData: any = "";
-      try {
-        aesKeyData = await getCrypto().subtle.decrypt(
-          {
-            name: "RSA-OAEP",
-          } as RSAConfig,
-          privateKey,
-          new Uint8Array(encryptedAESKey)
-        );
-      }
-      catch (error) {
-        throw new CryptoOperationError(`Failed to decrypt AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          'decrypt',
-          error instanceof Error ? error : undefined
-        );
-      }
-
-      // Import the AES key
-      try {
-        aesKey = await getCrypto().subtle.importKey(
-          "raw",
-          aesKeyData,
-          "AES-GCM",
-          true,
-          ["decrypt"]
-        );
-      }
-      catch (error) {
-        throw new KeyImportError(`Failed to import AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          'private',
-          error instanceof Error ? error : undefined
-        );
-      }
-    } else {
-      throw new Error("No AES key available for decryption - either provide encryptedAESKey or use master AES key");
-    }
-
-    // Decrypt the message with AES
-    let decryptedMessage: any = "";
-    try {
-      decryptedMessage = await getCrypto().subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv,
-        } as AESConfig,
-        aesKey,
-        new Uint8Array(encryptedMessage)
-      );
-    }
-    catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt message: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
-    }
-
-    try {
-      const decoder = getTextDecoder();
-      const message = decoder.decode(decryptedMessage);
-
-      const verified = await this.verifySignature(signature, message, sender);
-
-      if (!verified) {
-        throw new Error("Signature verification failed");
-      }
-
-      return message;    }
-    catch (error) {
-      throw new CryptoOperationError(`Failed to verify signature: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'verify',
-        error instanceof Error ? error : undefined
-      );
-    }
+  public decryptMessage = async (encryptedData: IRSAEncryptedMessage, sender: string, useMasterAESKey: boolean = false): Promise<string> => {
+    const message = await this.decryptHybridMessage(encryptedData, useMasterAESKey);
+    await this.requireVerifiedSignature(encryptedData.signature, message, sender);
+    return message;
   };
 
   /**
@@ -793,91 +439,8 @@ class RSAMessage {
    * @returns {Promise<IDecryptionResult>} Object containing the decrypted message and verification status
    */
   public async decryptMessageUnsafe(encryptedData: IRSAEncryptedMessage, sender: string, useMasterAESKey: boolean = false): Promise<IDecryptionResult> {
-    const { iv, encryptedMessage, encryptedAESKey, signature } = encryptedData;
-    let aesKey: CryptoKey;
-
-    if (useMasterAESKey && this.encryptedMasterAESKey) {
-      aesKey = await this.getDecryptedMasterAESKey();
-    } else if (encryptedAESKey) {
-      // Standard RSA-AES decryption
-      let privateKey: CryptoKey;
-      try {
-        privateKey = await this.getPrivateKey("decrypt");
-      }
-      catch (error) {
-        throw new Error(`Failed to import private key: ${error}`);
-      }
-
-      // Decrypt the AES key with RSA
-      let aesKeyData: any = "";
-      try {
-        aesKeyData = await getCrypto().subtle.decrypt(
-          {
-            name: "RSA-OAEP",
-          } as RSAConfig,
-          privateKey,
-          new Uint8Array(encryptedAESKey)
-        );
-      }
-      catch (error) {
-        throw new CryptoOperationError(`Failed to decrypt AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          'decrypt',
-          error instanceof Error ? error : undefined
-        );
-      }
-
-      // Import the AES key
-      try {
-        aesKey = await getCrypto().subtle.importKey(
-          "raw",
-          aesKeyData,
-          "AES-GCM",
-          true,
-          ["decrypt"]
-        );
-      }
-      catch (error) {
-        throw new KeyImportError(`Failed to import AES key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          'private',
-          error instanceof Error ? error : undefined
-        );
-      }
-    } else {
-      throw new Error("No AES key available for decryption - either provide encryptedAESKey or use master AES key");
-    }
-
-    // Decrypt the message with AES
-    let decryptedMessage: any = "";
-    try {
-      decryptedMessage = await getCrypto().subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv,
-        } as AESConfig,
-        aesKey,
-        new Uint8Array(encryptedMessage)
-      );
-    }
-    catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt message: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
-    }
-
-    const decoder = getTextDecoder();
-    const message = decoder.decode(decryptedMessage);
-
-    // Attempt signature verification but don't throw on failure
-    let verified = false;
-    try {
-      verified = await this.verifySignature(signature, message, sender);
-    } catch (error) {
-      // Signature verification failed, but we still return the message
-      verified = false;
-    }
-
-    return { message, verified };
+    const message = await this.decryptHybridMessage(encryptedData, useMasterAESKey);
+    return { message, verified: await this.isSignatureVerified(encryptedData.signature, message, sender) };
   }
 
   /**
@@ -889,23 +452,13 @@ class RSAMessage {
   public signMessage = async (message: string): Promise<ArrayBuffer> => {
     const encoder = getTextEncoder();
     const data = encoder.encode(message);
-    
+
     try {
       const privateKey = await this.getPrivateKey("sign");
-      return await getCrypto().subtle.sign(
-        {
-          name: "RSA-PSS",
-          saltLength: 32,
-        } as RSAConfig,
-        privateKey,
-        data
-      );
+      return await getCrypto().subtle.sign(RSA_PSS, privateKey, data);
     }
     catch (error) {
-      throw new CryptoOperationError(`Failed to sign message: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'sign',
-        error instanceof Error ? error : undefined
-      );
+      throw cryptoOperationError("Failed to sign message", "sign", error);
     }
   };
 
@@ -928,27 +481,17 @@ class RSAMessage {
 
       const encoder = getTextEncoder();
       const data = encoder.encode(message);
-    
-      const verified: boolean = await getCrypto().subtle.verify(
-        {
-          name: "RSA-PSS",
-          saltLength: 32,
-        } as RSAConfig,
-        publicKey,
-        new Uint8Array(signature),
-        data
-      );
+
+      const verified: boolean = await getCrypto().subtle.verify(RSA_PSS, publicKey, new Uint8Array(signature), data);
 
       return verified;
     }
     catch (error) {
-      throw new CryptoOperationError(`Failed to verify signature: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'verify',
-        error instanceof Error ? error : undefined
-      );
+      throw cryptoOperationError("Failed to verify signature", "verify", error);
     }
   };
-    /**
+
+  /**
    * Sets a user's public encryption key and optionally their verification key
    * @param userId - The ID of the user to set keys for
    * @param publicKey - The public encryption key string
@@ -995,30 +538,30 @@ class RSAMessage {
   public hasVerifyKey(userId: string): boolean {
     return this.verifyKeys.has(userId);
   }
-  
+
   /**
    * Exports an encrypted message object to a string format
    * @param message - The encrypted message object to export
    * @returns An encoded string representation of the encrypted message
    */
   public exportEncryptedMessage(message: IRSAEncryptedMessage): string {
-    return encode(JSON.stringify({
-      iv: String.fromCharCode(...message.iv),
+    return encodeJson({
+      iv: bytesToBinaryString(message.iv),
       encryptedMessage: bufferToBase64(message.encryptedMessage),
       encryptedAESKey: message.encryptedAESKey ? bufferToBase64(message.encryptedAESKey) : undefined,
       signature: bufferToBase64(message.signature)
-    }));
+    });
   }
-  
+
   /**
    * Imports an encoded string back into an encrypted message object
    * @param encoded - The encoded string to import
    * @returns The decoded IRSAEncryptedMessage object
    */
   public importEncryptedMessage(encoded: string): IRSAEncryptedMessage {
-    const decoded = JSON.parse(decode(encoded));
+    const decoded = decodeJson(encoded);
     return {
-      iv: new Uint8Array([...decoded.iv].map(c => c.charCodeAt(0))),
+      iv: binaryStringToBytes(decoded.iv),
       encryptedMessage: base64ToBuffer(decoded.encryptedMessage),
       encryptedAESKey: decoded.encryptedAESKey ? base64ToBuffer(decoded.encryptedAESKey) : undefined,
       signature: base64ToBuffer(decoded.signature)
@@ -1032,24 +575,13 @@ class RSAMessage {
    */
   public async generateECDHKeyPair(): Promise<ECDHPublicKey> {
     try {
-      const keyPair: ECDHKeyPair = await getCrypto().subtle.generateKey(
-        {
-          name: "ECDH",
-          namedCurve: "P-256",
-        },
-        true,
-        ["deriveBits", "deriveKey"]
-      );
+      const keyPair: ECDHKeyPair = await getCrypto().subtle.generateKey(ECDH_P256, true, ["deriveBits", "deriveKey"]);
 
       this.ecdhPrivateKey = keyPair.privateKey;
-      
-      const publicKeyRaw = await getCrypto().subtle.exportKey("jwk", keyPair.publicKey);
-      return { publicKey: encode(JSON.stringify(publicKeyRaw)) };
+
+      return { publicKey: await exportKeyString(keyPair.publicKey) };
     } catch (error) {
-      throw new CryptoOperationError(`Failed to generate ECDH key pair: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'encrypt',
-        error instanceof Error ? error : undefined
-      );
+      throw cryptoOperationError("Failed to generate ECDH key pair", "encrypt", error);
     }
   }
 
@@ -1061,24 +593,11 @@ class RSAMessage {
    */
   public async setECDHPublicKey(userId: string, publicKey: string): Promise<void> {
     try {
-      const publicKeyData = JSON.parse(decode(publicKey));
-      const cryptoKey = await getCrypto().subtle.importKey(
-        "jwk",
-        publicKeyData,
-        {
-          name: "ECDH",
-          namedCurve: "P-256",
-        },
-        false,
-        []
-      );
-      
+      const cryptoKey = await getCrypto().subtle.importKey("jwk", decodeJson(publicKey), ECDH_P256, false, []);
+
       this.ecdhPublicKeys.set(userId, cryptoKey);
     } catch (error) {
-      throw new KeyImportError(`Failed to import ECDH public key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'public',
-        error instanceof Error ? error : undefined
-      );
+      throw keyImportError("Failed to import ECDH public key", "public", error);
     }
   }
 
@@ -1130,10 +649,7 @@ class RSAMessage {
           hash: "SHA-256",
         } as DerivedKeyConfig,
         baseKey,
-        {
-          name: "AES-GCM",
-          length: 256,
-        },
+        AES_GCM_256,
         false,
         ["encrypt", "decrypt"]
       );
@@ -1141,10 +657,7 @@ class RSAMessage {
       this.sharedKeys.set(userId, derivedKey);
       return keySalt;
     } catch (error) {
-      throw new CryptoOperationError(`Failed to derive shared key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'encrypt',
-        error instanceof Error ? error : undefined
-      );
+      throw cryptoOperationError("Failed to derive shared key", "encrypt", error);
     }
   }
 
@@ -1156,26 +669,11 @@ class RSAMessage {
    * @throws Error if shared key is not found or encryption fails
    */
   public async encryptWithSharedKey(message: string, userId: string): Promise<SharedKeyData> {
-    const sharedKey = this.sharedKeys.get(userId);
-    if (!sharedKey) {
-      throw new Error(`Shared key not found for user: ${userId}. Call deriveSharedKey() first.`);
-    }
+    const sharedKey = this.getSharedKey(userId);
 
     try {
-      const encoder = getTextEncoder();
-      const data = encoder.encode(message);
-      
-      const iv = getCrypto().getRandomValues(new Uint8Array(12)); // 12-byte IV for AES-GCM
+      const { iv, encryptedMessage } = await aesGcmEncrypt(sharedKey, getTextEncoder().encode(message));
       const salt = getCrypto().getRandomValues(new Uint8Array(16)); // Salt for this encryption
-      
-      const encryptedMessage = await getCrypto().subtle.encrypt(
-        {
-          name: "AES-GCM",
-          iv,
-        } as AESConfig,
-        sharedKey,
-        data
-      );
 
       return {
         salt,
@@ -1183,10 +681,7 @@ class RSAMessage {
         iv,
       };
     } catch (error) {
-      throw new CryptoOperationError(`Failed to encrypt with shared key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'encrypt',
-        error instanceof Error ? error : undefined
-      );
+      throw cryptoOperationError("Failed to encrypt with shared key", "encrypt", error);
     }
   }
 
@@ -1198,14 +693,11 @@ class RSAMessage {
    * @throws Error if shared key is not found or decryption fails
    */
   public async decryptWithSharedKey(encryptedData: SharedKeyData, userId: string): Promise<string> {
-    const sharedKey = this.sharedKeys.get(userId);
-    if (!sharedKey) {
-      throw new Error(`Shared key not found for user: ${userId}. Call deriveSharedKey() first.`);
-    }
+    const sharedKey = this.getSharedKey(userId);
 
     try {
       const { iv, encryptedMessage } = encryptedData;
-      
+
       const decryptedMessage = await getCrypto().subtle.decrypt(
         {
           name: "AES-GCM",
@@ -1215,13 +707,9 @@ class RSAMessage {
         new Uint8Array(encryptedMessage)
       );
 
-      const decoder = getTextDecoder();
-      return decoder.decode(decryptedMessage);
+      return getTextDecoder().decode(decryptedMessage);
     } catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt with shared key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
+      throw cryptoOperationError("Failed to decrypt with shared key", "decrypt", error);
     }
   }
 
@@ -1231,11 +719,11 @@ class RSAMessage {
    * @returns An encoded string representation of the encrypted data
    */
   public exportSharedKeyData(data: SharedKeyData): string {
-    return encode(JSON.stringify({
-      salt: String.fromCharCode(...data.salt),
+    return encodeJson({
+      salt: bytesToBinaryString(data.salt),
       encryptedMessage: bufferToBase64(data.encryptedMessage),
-      iv: String.fromCharCode(...data.iv)
-    }));
+      iv: bytesToBinaryString(data.iv)
+    });
   }
 
   /**
@@ -1244,11 +732,11 @@ class RSAMessage {
    * @returns The decoded SharedKeyData object
    */
   public importSharedKeyData(encoded: string): SharedKeyData {
-    const decoded = JSON.parse(decode(encoded));
+    const decoded = decodeJson(encoded);
     return {
-      salt: new Uint8Array([...decoded.salt].map(c => c.charCodeAt(0))),
+      salt: binaryStringToBytes(decoded.salt),
       encryptedMessage: base64ToBuffer(decoded.encryptedMessage),
-      iv: new Uint8Array([...decoded.iv].map(c => c.charCodeAt(0)))
+      iv: binaryStringToBytes(decoded.iv)
     };
   }
 
@@ -1295,33 +783,101 @@ class RSAMessage {
    * @throws Error if shared key is not found or decryption fails
    */
   public async decryptWithSharedKeyUnsafe(encryptedData: SharedKeyData, userId: string): Promise<IDecryptionResult> {
+    // SharedKeyData doesn't include signatures, so verification is always true
+    return { message: await this.decryptWithSharedKey(encryptedData, userId), verified: true };
+  }
+
+  private requireMasterAESKey(): string {
+    if (!this.encryptedMasterAESKey) {
+      throw new Error("No master AES key set");
+    }
+    return this.encryptedMasterAESKey;
+  }
+
+  private getSharedKey(userId: string): CryptoKey {
     const sharedKey = this.sharedKeys.get(userId);
     if (!sharedKey) {
       throw new Error(`Shared key not found for user: ${userId}. Call deriveSharedKey() first.`);
     }
+    return sharedKey;
+  }
+
+  // Encrypts an AES key for a user as an exported message, the form master AES keys are shared in
+  private async encryptKeyForUser(aesKey: CryptoKey, userId: string): Promise<string> {
+    const exported = await getCrypto().subtle.exportKey("jwk", aesKey);
+    return this.exportEncryptedMessage(await this.encryptMessage(JSON.stringify(exported), userId));
+  }
+
+  // Decrypts an RSA-encrypted AES key with our private key
+  private async unwrapAESKey(encryptedAESKey: ArrayBuffer): Promise<CryptoKey> {
+    let privateKey: CryptoKey;
+    try {
+      privateKey = await this.getPrivateKey("decrypt");
+    } catch (error) {
+      throw new Error(`Failed to import private key: ${error}`);
+    }
+
+    let aesKeyData: ArrayBuffer;
+    try {
+      aesKeyData = await getCrypto().subtle.decrypt(RSA_OAEP, privateKey, new Uint8Array(encryptedAESKey));
+    } catch (error) {
+      throw cryptoOperationError("Failed to decrypt AES key", "decrypt", error);
+    }
 
     try {
-      const { iv, encryptedMessage } = encryptedData;
-      
-      const decryptedMessage = await getCrypto().subtle.decrypt(
-        {
-          name: "AES-GCM",
-          iv,
-        } as AESConfig,
-        sharedKey,
-        new Uint8Array(encryptedMessage)
-      );
-
-      const decoder = getTextDecoder();
-      const message = decoder.decode(decryptedMessage);
-      
-      // SharedKeyData doesn't include signatures, so verification is always true
-      return { message, verified: true };
+      return await getCrypto().subtle.importKey("raw", aesKeyData, "AES-GCM", true, ["decrypt"]);
     } catch (error) {
-      throw new CryptoOperationError(`Failed to decrypt with shared key: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        'decrypt',
-        error instanceof Error ? error : undefined
-      );
+      throw keyImportError("Failed to import AES key", "private", error);
+    }
+  }
+
+  // AES-GCM encrypts a message with a new IV and signs its plaintext
+  private async encryptAndSign(aesKey: CryptoKey, message: string) {
+    const { iv, encryptedMessage } = await aesGcmEncrypt(aesKey, getTextEncoder().encode(message));
+    const signature = await this.signMessage(message);
+    return { iv, encryptedMessage, signature };
+  }
+
+  // Decrypts with the master AES key or the RSA-encrypted one; the caller checks the signature
+  private async decryptHybridMessage(encryptedData: IRSAEncryptedMessage, useMasterAESKey: boolean): Promise<string> {
+    const { iv, encryptedMessage, encryptedAESKey } = encryptedData;
+    let aesKey: CryptoKey;
+
+    if (useMasterAESKey && this.encryptedMasterAESKey) {
+      aesKey = await this.getDecryptedMasterAESKey();
+    } else if (encryptedAESKey) {
+      aesKey = await this.unwrapAESKey(encryptedAESKey);
+    } else {
+      throw new Error("No AES key available for decryption - either provide encryptedAESKey or use master AES key");
+    }
+
+    return getTextDecoder().decode(await aesGcmDecrypt(aesKey, iv, encryptedMessage, "Failed to decrypt message"));
+  }
+
+  // Decrypts a message encrypted with the master AES key; the caller checks the signature
+  private async decryptMasterAESKeyMessage(encryptedData: IRSAEncryptedMessage): Promise<string> {
+    const aesKey = await this.getDecryptedMasterAESKey();
+    const { iv, encryptedMessage } = encryptedData;
+    return getTextDecoder().decode(await aesGcmDecrypt(aesKey, iv, encryptedMessage, "Failed to decrypt with master AES key"));
+  }
+
+  // Throws a "verify" CryptoOperationError unless the signature is valid
+  private async requireVerifiedSignature(signature: ArrayBuffer, message: string, signer: string): Promise<void> {
+    try {
+      if (!await this.verifySignature(signature, message, signer)) {
+        throw new Error("Signature verification failed");
+      }
+    } catch (error) {
+      throw cryptoOperationError("Failed to verify signature", "verify", error);
+    }
+  }
+
+  // For the unsafe decrypt methods: any verification failure is reported as false
+  private async isSignatureVerified(signature: ArrayBuffer, message: string, signer: string): Promise<boolean> {
+    try {
+      return await this.verifySignature(signature, message, signer);
+    } catch (error) {
+      return false;
     }
   }
 }

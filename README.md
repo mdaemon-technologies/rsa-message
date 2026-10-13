@@ -71,7 +71,7 @@ const decrypted = await recipient.decryptMessage(decoded, 'senderId');
 
 ### Derived Key Encryption (ECDH + AES-GCM)
 
-For scenarios requiring perfect forward secrecy and efficient symmetric encryption, you can use ECDH key exchange:
+For efficient symmetric encryption between two users, you can derive a shared AES key with ECDH key exchange. An instance's ECDH key pair exists only in memory for the life of that instance, and each shared key is reused for every message to that user. To rotate keys, generate new ECDH key pairs, exchange the new public keys, and derive the shared keys again:
 
 ```js
 // Initialize RSA instances for both users
@@ -257,31 +257,47 @@ Verifies a message signature using the sender's public verification key.
 - `message`: The original message that was signed
 - `userId`: The sender's user ID
 - Returns: Promise resolving to true if signature is valid, false otherwise
+- Throws: Error if no verification key is stored for `userId`, or `CryptoOperationError` if the stored key cannot be imported
 
-### `setPublicKey(userId: string, publicKey: string, verifyKey: string): void`
-Stores another user's public key.
+### `setPublicKey(userId: string, publicKey: string, verifyKey?: string): void`
+Stores another user's public key, and their verification key when given.
 - `userId`: Unique identifier for the other user
 - `publicKey`: Base64 encoded public key
+- `verifyKey`: Optional base64 encoded verification key
+- Throws: Error if `userId` or `publicKey` is empty
+
+### `setVerifyKey(userId: string, verifyKey: string): void`
+Stores or replaces another user's verification key.
+- `userId`: Unique identifier for the other user
 - `verifyKey`: Base64 encoded verification key
+- Throws: Error if `userId` or `verifyKey` is empty
 
 ### `hasPublicKey(userId: string): boolean`
 Checks if a user's public key is stored.
 - `userId`: Unique identifier for the user
 - Returns: `true` if the user's public key is stored, `false` otherwise
 
-### `encryptMessage(message: string, userId: string, useMasterKey?: boolean): Promise<IRSAEncryptedMessage>`
+### `hasVerifyKey(userId: string): boolean`
+Checks if a user's verification key is stored.
+- `userId`: Unique identifier for the user
+- Returns: `true` if the user's verification key is stored, `false` otherwise
+
+### `encryptMessage(message: string, userId: string, useMasterAESKey?: boolean): Promise<IRSAEncryptedMessage>`
 Encrypts and signs a message for a specific user.
 - `message`: The message to encrypt
-- `userId`: The recipient's user ID
-- `useMasterKey`: Optional - if true and master key is set, uses master AES key instead of generating new AES key
-- Returns: Encrypted message object
+- `userId`: The recipient's user ID; their public key must be stored, even when the master AES key is used
+- `useMasterAESKey`: Optional - if true and a master AES key is set, uses it instead of generating a new AES key
+- Returns: Encrypted message object (`encryptedAESKey` is undefined when the master AES key is used)
 
-### `decryptMessage(encryptedData: IRSAEncryptedMessage, sender: string, useMasterKey?: boolean): Promise<string>`
+### `decryptMessage(encryptedData: IRSAEncryptedMessage, sender: string, useMasterAESKey?: boolean): Promise<string>`
 Decrypts and verifies a message from a specific user.
 - `encryptedData`: The encrypted message object
 - `sender`: The sender's user ID
-- `useMasterKey`: Optional - if true and master key is set, uses master AES key for decryption
+- `useMasterAESKey`: Optional - if true and a master AES key is set, uses it for decryption
 - Returns: Decrypted message
+
+### `generateAESKey(): Promise<CryptoKey>`
+Generates a new extractable 256-bit AES-GCM key.
 
 ### `exportEncryptedMessage(message: IRSAEncryptedMessage): string`
 Exports an encrypted message object to a base64 encoded string for transport or storage.
@@ -344,19 +360,8 @@ Decrypts a message using the master AES key without throwing on signature verifi
 - Returns: Object with `{ message: string, verified: boolean }`
 - Throws: Error if no master key is set or decryption fails (but not signature verification)
 
-### Enhanced `encryptMessage(message: string, userId: string, useMasterKey?: boolean): Promise<IRSAEncryptedMessage>`
-The standard encrypt method now supports an optional parameter to use the master AES key.
-- `message`: The message to encrypt
-- `userId`: The recipient's user ID
-- `useMasterKey`: If true and master key is set, uses master AES key instead of generating new AES key
-- Returns: Encrypted message object (encryptedAESKey will be undefined if master key is used)
-
-### Enhanced `decryptMessage(encryptedData: IRSAEncryptedMessage, sender: string, useMasterKey?: boolean): Promise<string>`
-The standard decrypt method now supports an optional parameter to use the master AES key.
-- `encryptedData`: The encrypted message object
-- `sender`: The sender's user ID
-- `useMasterKey`: If true and master key is set, uses master AES key for decryption
-- Returns: Decrypted message
+### `encryptMessage()` and `decryptMessage()` with the master AES key
+Pass `true` as the third argument of `encryptMessage()` or `decryptMessage()` to use the master AES key when one is set.
 
 ## Derived Key Encryption Methods (ECDH + PBKDF2)
 
@@ -426,7 +431,7 @@ Removes the ECDH public key for the specified user.
 - AES-GCM for symmetric message encryption
 - Implements message signing and signature verification
 - Master AES key functionality for efficient group/room encryption scenarios
-- ECDH key exchange with P-256 elliptic curve for perfect forward secrecy
+- ECDH key exchange with the P-256 elliptic curve for shared (derived) keys
 - PBKDF2 key derivation with 100,000 iterations for enhanced security
 - Derived key encryption using AES-GCM with 256-bit keys
 - Base64 encoding for message transport
@@ -474,6 +479,15 @@ These methods are useful when you want to read the message content regardless of
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+## Releasing
+
+Releases are published to npm from GitHub Actions ([publish.yml](.github/workflows/publish.yml)) through npm trusted publishing, so no npm token is stored in the repository.
+
+1. Update `CHANGELOG.md` and run `npm version <patch|minor|major>`, which bumps `package.json` and creates the matching `v<version>` tag.
+2. Push the commit and the tag (`git push --follow-tags`) and wait for CI to pass.
+3. Publish a GitHub Release for the tag. The workflow builds, tests, checks that the tag matches `package.json`, and stages the version on npm.
+4. A maintainer approves the staged version with 2FA on npmjs.com or with `npm stage approve`. Only then is it public.
 
 ## License
 

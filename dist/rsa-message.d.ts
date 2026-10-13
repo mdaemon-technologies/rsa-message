@@ -40,7 +40,8 @@ declare class RSAMessage {
      * @returns {Promise<CryptoKey>} The decrypted AES-GCM key
      */
     getDecryptedMasterAESKey(): Promise<CryptoKey>;
-    /**   * Encrypts the current master AES key with another user's publicKey and exports it (base64 string).
+    /**
+     * Encrypts the current master AES key with another user's publicKey and exports it (base64 string).
      * @param {string} userId - The user to encrypt the key for
      * @returns {Promise<string>} The encrypted master AES key (base64 string)
      */
@@ -133,22 +134,16 @@ declare class RSAMessage {
     private importPrivateKey;
     private importPublicKey;
     /**
-     * Encrypts a message using RSA-AES hybrid encryption
-     * @param message - The plaintext message to encrypt
-     * @param userId - The ID of the recipient user whose public key will be used
-     * @returns {Promise<IRSAEncryptedMessage>} Object containing the encrypted message components:
-     *  - iv: Initialization vector for AES-GCM
-     *  - encryptedMessage: The AES encrypted message
-     *  - encryptedAESKey: The RSA encrypted AES key
-     *  - signature: Digital signature of the message
-     * @throws {Error} If public key is not found for the user
-     */
-    /**
      * Encrypts a message using RSA-AES hybrid encryption, using the master AES key if set, otherwise generates a new AES key.
      * @param message - The plaintext message to encrypt
      * @param userId - The ID of the recipient user whose public key will be used
      * @param useMasterAESKey - If true, use the master AES key (if set)
-     * @returns {Promise<IRSAEncryptedMessage>} Object containing the encrypted message components
+     * @returns {Promise<IRSAEncryptedMessage>} Object containing the encrypted message components:
+     *  - iv: Initialization vector for AES-GCM
+     *  - encryptedMessage: The AES encrypted message
+     *  - encryptedAESKey: The RSA encrypted AES key (undefined when the master AES key is used)
+     *  - signature: Digital signature of the message
+     * @throws {Error} If public key is not found for the user
      */
     encryptMessage: (message: string, userId: string, useMasterAESKey?: boolean) => Promise<IRSAEncryptedMessage>;
     /**
@@ -193,12 +188,12 @@ declare class RSAMessage {
      */
     verifySignature: (signature: ArrayBuffer, message: string, userId: string) => Promise<boolean>;
     /**
-   * Sets a user's public encryption key and optionally their verification key
-   * @param userId - The ID of the user to set keys for
-   * @param publicKey - The public encryption key string
-   * @param verifyKey - Optional verification key string for backwards compatibility
-   * @throws Error if userId or publicKey are invalid
-   */
+     * Sets a user's public encryption key and optionally their verification key
+     * @param userId - The ID of the user to set keys for
+     * @param publicKey - The public encryption key string
+     * @param verifyKey - Optional verification key string for backwards compatibility
+     * @throws Error if userId or publicKey are invalid
+     */
     setPublicKey(userId: string, publicKey: string, verifyKey?: string): void;
     /**
      * Sets a user's public verification key used for signature verification
@@ -311,5 +306,14 @@ declare class RSAMessage {
      * @throws Error if shared key is not found or decryption fails
      */
     decryptWithSharedKeyUnsafe(encryptedData: SharedKeyData, userId: string): Promise<IDecryptionResult>;
+    private requireMasterAESKey;
+    private getSharedKey;
+    private encryptKeyForUser;
+    private unwrapAESKey;
+    private encryptAndSign;
+    private decryptHybridMessage;
+    private decryptMasterAESKeyMessage;
+    private requireVerifiedSignature;
+    private isSignatureVerified;
 }
 export default RSAMessage;

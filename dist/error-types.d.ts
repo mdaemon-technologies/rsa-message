@@ -8,3 +8,5 @@ export declare class KeyImportError extends Error {
     readonly originalError?: Error | undefined;
     constructor(message: string, keyType: 'public' | 'private', originalError?: Error | undefined);
 }
+export declare const cryptoOperationError: (failure: string, operation: CryptoOperationError["operation"], error: unknown) => CryptoOperationError;
+export declare const keyImportError: (failure: string, keyType: KeyImportError["keyType"], error: unknown) => KeyImportError;

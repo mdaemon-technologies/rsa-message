@@ -498,7 +498,7 @@ describe('RSAMessage', () => {
     });
 
     describe('error handling', () => {
-      test('getDecryptedMasterAESKey() returns null when no master key set', async () => {
+      test('getDecryptedMasterAESKey() throws when no master key set', async () => {
         await expect(sender.getDecryptedMasterAESKey())
           .rejects.toThrow('No master AES key set');
       });

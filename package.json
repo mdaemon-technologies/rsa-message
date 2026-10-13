@@ -1,7 +1,7 @@
 {
   "name": "@mdaemon/rsa-message",
   "type": "module",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "RSA message encryption, signing, decryption, and verification using webcrypto or node crypto",
   "main": "dist/rsa-message.cjs",
   "module": "dist/rsa-message.mjs",

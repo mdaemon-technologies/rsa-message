@@ -5,7 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.0] - Unreleased
+## [2.3.1] - 2026-10-13
+
+No API or behavior changes: messages, keys and errors are the same as in 2.3.0.
+
+### Changed
+- Internal refactor of `rsa-message.ts`. Decryption, signature checking, master AES key wrapping and error wrapping, which were repeated across methods, now share private helpers. Algorithm parameters live in `crypto-params.ts`, and key and AES-GCM helpers in `crypto-ops.ts`.
+- README: documented `setVerifyKey()`, `hasVerifyKey()` and `generateAESKey()`; `setPublicKey()`'s `verifyKey` is marked optional; `verifySignature()` lists the errors it throws; parameter names match the type declarations; the duplicated master AES key entries for `encryptMessage()` and `decryptMessage()` are merged; the ECDH description no longer claims perfect forward secrecy, and explains how long ECDH keys live and how to rotate them; and a Releasing section describes the publish workflow.
+- Releases are now staged on npm by a GitHub Actions workflow through npm trusted publishing, and a maintainer approves each one with 2FA.
+- CI uses `actions/checkout@v7` and `actions/setup-node@v7`, which run on Node 24.
+
+## [2.3.0] - 2026-10-13
 
 ### Added
 - `initKeySet(keySet?)` generates RSA key pairs whose private keys are non-extractable `CryptoKey`s, or reuses a key set returned earlier (for example one stored in IndexedDB). The public keys stay exportable strings in the same format as `init()`.
@@ -143,6 +153,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Initial release: RSA message encryption, signing, decryption and verification using Web Crypto or Node.js crypto.
 
+[2.3.1]: https://www.npmjs.com/package/@mdaemon/rsa-message/v/2.3.1
+[2.3.0]: https://www.npmjs.com/package/@mdaemon/rsa-message/v/2.3.0
+[2.2.4]: https://www.npmjs.com/package/@mdaemon/rsa-message/v/2.2.4
 [2.2.3]: https://www.npmjs.com/package/@mdaemon/rsa-message/v/2.2.3
 [2.2.2]: https://www.npmjs.com/package/@mdaemon/rsa-message/v/2.2.2
 [2.2.1]: https://www.npmjs.com/package/@mdaemon/rsa-message/v/2.2.1

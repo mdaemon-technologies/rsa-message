@@ -32,6 +32,16 @@ export const base64ToBuffer = (base64String: string): ArrayBuffer => {
   return buffer;
 }
 
+// Keys and exported messages are JSON, base64 encoded
+export const encodeJson = (value: unknown): string => encode(JSON.stringify(value));
+
+export const decodeJson = (encoded: string): any => JSON.parse(decode(encoded));
+
+// The iv and salt fields are exported as strings with one char code (0-255) per byte
+export const bytesToBinaryString = (bytes: Uint8Array): string => String.fromCharCode(...bytes);
+
+export const binaryStringToBytes = (str: string): Uint8Array => new Uint8Array([...str].map(c => c.charCodeAt(0)));
+
 // Codes of the deprecation warnings already shown; each is shown once per page or process
 export const shownDeprecations = new Set<string>();
 
