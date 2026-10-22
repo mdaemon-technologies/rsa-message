@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@mdaemon/rsa-message?color=blue)](https://www.npmjs.com/package/@mdaemon/rsa-message)
 [![license](https://img.shields.io/npm/l/@mdaemon/rsa-message?color=green)](LICENSE)
 [![node](https://img.shields.io/node/v/@mdaemon/rsa-message)](https://nodejs.org)
-[![install size](https://packagephobia.com/badge?p=@mdaemon/rsa-message)](https://packagephobia.com/result?p=@mdaemon/rsa-message)
+[![install size](https://img.shields.io/npm/unpacked-size/@mdaemon/rsa-message)](https://packagephobia.com/result?p=@mdaemon/rsa-message)
 [![CI](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml/badge.svg)](https://github.com/mdaemon-technologies/rsa-message/actions/workflows/node.js.yml)
 
 RSA message encryption, signing, decryption, and verification using webcrypto or node crypto
